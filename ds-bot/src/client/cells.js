@@ -2,7 +2,7 @@ import { createElement as h, Fragment, useEffect, useLayoutEffect, useRef, useSt
 import { createPortal } from 'react-dom'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { inkText } from './inks.js'
-import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
+import { linkMentions, normalizeWindowsMarkdownPaths, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
 import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon } from './icons.js'
 import { colorOf, toolState, BotMark, RoomAvatar } from './mark.js'
 import { AnsweredCell, SettledQuestion, PendingQuestion } from './questions.js'
@@ -10,6 +10,7 @@ import { SecretToolCell } from './secret-card.js'
 import { dateLocale, t } from './i18n.js'
 import { failureLabel } from './diagnostics.js'
 import { turnReasoning } from './turn-reasoning.js'
+import { workReplyText } from './work-reply.js'
 
 // -------------------------------------------------------------------------
 // Chat cells
@@ -18,7 +19,7 @@ const mdLabels = () => ({ code: { copyLabel: t('Copy'), copiedLabel: t('Copied')
 
 // `lead` (a sender avatar in group chats) sits beside the last bubble, in the same
 // row, so it lines up with the bubble whether or not reactions hang below it.
-export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead }) {
+export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead, showTools = true }) {
   const onClick = (event) => {
     const target = mentionTarget(event)
     if (target === null) return
@@ -37,9 +38,9 @@ export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, 
         h('div', { className: 'bt-msg-line' },
           lead && last ? lead : null,
           h('div', { className: 'bt-bubble' },
-            h(MarkdownText, { text: linkMentions(text, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact' })),
+            h(MarkdownText, { text: linkMentions(normalizeWindowsMarkdownPaths(text), roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact' })),
         ),
-        live ? null : h(MessageTools, { text, name: roster.byId[selfId]?.name ?? t('Bot'), sessionId, react: key ? emoji => actions.toggleReaction(msgKey, index, emoji) : undefined, actions }),
+        !showTools || live ? null : h(MessageTools, { text, name: roster.byId[selfId]?.name ?? t('Bot'), sessionId, react: key ? emoji => actions.toggleReaction(msgKey, index, emoji) : undefined, actions }),
         picked.length ? h('div', { className: 'bt-reacts' }, picked.map(emoji => h('button', {
           key: emoji, type: 'button', className: 'bt-react', 'aria-label': t('Remove reaction {emoji}', { emoji }), onClick: () => actions.toggleReaction(msgKey, index, emoji),
         }, emoji))) : null)
@@ -149,7 +150,7 @@ export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, us
       })
     }),
     reasoning ? h(ThinkingRow, { text: reasoning }) : null,
-    texts.length ? h(Bubbles, { texts, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi }) : null)
+    texts.length ? h(Bubbles, { texts, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi, showTools: false }) : null)
 }
 
 function EventLine({ prefix, bots, joiner = t('and'), onOpen, whole = false }) {
@@ -447,8 +448,10 @@ export const unseenSince = (visit, time) => typeof visit?.seen === 'number' && t
 
 // A turn's tail sits right before the next turn's first row, so the separator for a
 // pause between turns renders here.
-export function TurnTailCell({ node, sessionId, useTurnClock, useUi, actions }) {
+export function TurnTailCell({ node, sessionId, useRoster, useTurnSteps, useTurnClock, useUi, actions }) {
   const data = node.data
+  const roster = useRoster(value => value)
+  const steps = useTurnSteps(String(data.turn))
   useEffect(() => { actions.noteTurnTime(sessionId, data.turn, 'end', data.time) }, [sessionId, data.turn, data.time])
   const label = useTurnClock((state) => {
     const start = nextTurnStart(state[sessionId] ?? {}, data.turn)
@@ -462,8 +465,18 @@ export function TurnTailCell({ node, sessionId, useTurnClock, useUi, actions }) 
     const start = nextTurnStart(state[sessionId] ?? {}, data.turn)
     return start !== undefined && start > visit.seen && start <= visit.entered
   })
-  if (!label && !fresh) return null
+  const reply = roster.byId[sessionId] && !roster.roomsById[sessionId] && !isHiddenTurn(roster, sessionId, data.turn)
+    ? workReplyText(steps)
+    : ''
+  const msgKey = `${sessionId}:work:${data.turn}`
+  const picked = useUi(state => state.reactions?.[msgKey]?.[0] ?? [])
+  if (!label && !fresh && !reply) return null
   return h(Fragment, null,
+    reply ? h(Fragment, null,
+      h(MessageTools, { text: reply, name: roster.byId[sessionId]?.name ?? t('Bot'), sessionId, react: emoji => actions.toggleReaction(msgKey, 0, emoji), actions }),
+      picked.length ? h('div', { className: 'bt-reacts' }, picked.map(emoji => h('button', {
+        key: emoji, type: 'button', className: 'bt-react', 'aria-label': t('Remove reaction {emoji}', { emoji }), onClick: () => actions.toggleReaction(msgKey, 0, emoji),
+      }, emoji))) : null) : null,
     label ? h('div', { className: 'bt-time-sep', role: 'separator' }, label) : null,
     fresh ? h(NewDivider) : null)
 }

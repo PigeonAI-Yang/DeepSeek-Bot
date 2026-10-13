@@ -1430,6 +1430,222 @@ function mentionSpans(text, bots, { references = [] } = {}) {
 
 // src/client/text.js
 var MENTION_ORIGIN = "https://bots.local/";
+function lineEnd(text, start) {
+  let end = start;
+  while (end < text.length && text[end] !== "\n" && text[end] !== "\r") end += 1;
+  return end;
+}
+function afterLine(text, end) {
+  if (end === text.length) return end;
+  return end + (text[end] === "\r" && text[end + 1] === "\n" ? 2 : 1);
+}
+function fenceOpening(text, start) {
+  let cursor = start;
+  let spaces = 0;
+  while (text[cursor] === " " && spaces < 4) {
+    cursor += 1;
+    spaces += 1;
+  }
+  if (spaces > 3) return null;
+  const marker = text[cursor];
+  if (marker !== "`" && marker !== "~") return null;
+  const runStart = cursor;
+  while (text[cursor] === marker) cursor += 1;
+  if (cursor - runStart < 3) return null;
+  const end = lineEnd(text, cursor);
+  if (marker === "`" && text.slice(cursor, end).includes("`")) return null;
+  return { marker, length: cursor - runStart, lineEnd: end };
+}
+function closingFenceEnd(text, start, fence) {
+  let cursor = start;
+  let spaces = 0;
+  while (text[cursor] === " " && spaces < 4) {
+    cursor += 1;
+    spaces += 1;
+  }
+  if (spaces > 3 || text[cursor] !== fence.marker) return null;
+  const runStart = cursor;
+  while (text[cursor] === fence.marker) cursor += 1;
+  if (cursor - runStart < fence.length) return null;
+  const end = lineEnd(text, cursor);
+  while (cursor < end && (text[cursor] === " " || text[cursor] === "	")) cursor += 1;
+  return cursor === end ? end : null;
+}
+function skipFence(text, opening) {
+  let start = afterLine(text, opening.lineEnd);
+  while (start < text.length) {
+    const end = closingFenceEnd(text, start, opening);
+    if (end !== null) return afterLine(text, end);
+    start = afterLine(text, lineEnd(text, start));
+  }
+  return text.length;
+}
+function escapedAt(text, index) {
+  let slashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) slashes += 1;
+  return slashes % 2 === 1;
+}
+function backtickRunEnd(text, start) {
+  let end = start;
+  while (text[end] === "`") end += 1;
+  return end;
+}
+function inlineCodeEnd(text, start, openingEnd) {
+  const length = openingEnd - start;
+  let cursor = openingEnd;
+  while (cursor < text.length) {
+    if (text[cursor] !== "`") {
+      cursor += 1;
+      continue;
+    }
+    const end = backtickRunEnd(text, cursor);
+    if (end - cursor === length) return end;
+    cursor = end;
+  }
+  return -1;
+}
+function labelEnd(text, opening) {
+  let depth = 1;
+  for (let cursor = opening + 1; cursor < text.length; cursor += 1) {
+    if (text[cursor] === "\\") {
+      cursor += 1;
+      continue;
+    }
+    if (text[cursor] === "[") depth += 1;
+    if (text[cursor] === "]" && --depth === 0) return cursor;
+  }
+  return -1;
+}
+function titleEnd(text, start, quote) {
+  let cursor = start + 1;
+  while (cursor < text.length) {
+    if (text[cursor] === "\r" || text[cursor] === "\n") return -1;
+    if (text[cursor] === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (text[cursor] === quote) return cursor + 1;
+    cursor += 1;
+  }
+  return -1;
+}
+function parenthesizedTitleEnd(text, start) {
+  let depth = 1;
+  for (let cursor = start + 1; cursor < text.length; cursor += 1) {
+    if (text[cursor] === "\r" || text[cursor] === "\n") return -1;
+    if (text[cursor] === "\\") {
+      cursor += 1;
+      continue;
+    }
+    if (text[cursor] === "(") depth += 1;
+    if (text[cursor] === ")" && --depth === 0) return cursor + 1;
+  }
+  return -1;
+}
+function linkSyntaxEnd(text, cursor) {
+  if (text[cursor] === ")") return cursor + 1;
+  const spaced = cursor;
+  while (text[cursor] === " " || text[cursor] === "	") cursor += 1;
+  if (cursor === spaced) return null;
+  if (text[cursor] === ")") return cursor + 1;
+  if (text[cursor] === '"' || text[cursor] === "'") cursor = titleEnd(text, cursor, text[cursor]);
+  else if (text[cursor] === "(") cursor = parenthesizedTitleEnd(text, cursor);
+  else return null;
+  if (cursor < 0) return null;
+  while (text[cursor] === " " || text[cursor] === "	") cursor += 1;
+  return text[cursor] === ")" ? cursor + 1 : null;
+}
+function parseLink(text, opening) {
+  const labelEndIndex = labelEnd(text, opening);
+  if (labelEndIndex < 0 || text[labelEndIndex + 1] !== "(") return null;
+  let cursor = labelEndIndex + 2;
+  while (text[cursor] === " " || text[cursor] === "	") cursor += 1;
+  const angled = text[cursor] === "<";
+  const destinationStart = angled ? cursor + 1 : cursor;
+  cursor = destinationStart;
+  let depth = 0;
+  if (angled) {
+    while (cursor < text.length) {
+      const character = text[cursor];
+      if (character === "\r" || character === "\n" || character === "<") return null;
+      if (character === "\\") {
+        if (text[cursor + 1] === "\r" || text[cursor + 1] === "\n") return null;
+        cursor += 2;
+        continue;
+      }
+      if (character === ">") break;
+      cursor += 1;
+    }
+    if (text[cursor] !== ">") return null;
+    const destinationEnd = cursor;
+    const end2 = linkSyntaxEnd(text, cursor + 1);
+    return end2 === null ? null : { destinationStart, destinationEnd, end: end2 };
+  }
+  while (cursor < text.length) {
+    const character = text[cursor];
+    if (character === " " || character === "	" || character === "\r" || character === "\n") break;
+    if (character === "\\") {
+      const escaped = text[cursor + 1];
+      if (escaped === "(" || escaped === ")") return null;
+      if (escaped === void 0 || escaped === "\r" || escaped === "\n") return null;
+      cursor += 2;
+      continue;
+    }
+    if (character === "(") depth += 1;
+    if (character === ")") {
+      if (depth === 0) return { destinationStart, destinationEnd: cursor, end: cursor + 1 };
+      depth -= 1;
+    }
+    cursor += 1;
+  }
+  if (depth !== 0) return null;
+  const end = linkSyntaxEnd(text, cursor);
+  return end === null ? null : { destinationStart, destinationEnd: cursor, end };
+}
+function normalizeWindowsMarkdownPaths(text) {
+  if (typeof text !== "string" || !text.includes("[") || !text.includes("\\")) return text;
+  let output = "";
+  let copied = 0;
+  for (let cursor = 0; cursor < text.length; ) {
+    if (cursor === 0 || text[cursor - 1] === "\n" || text[cursor - 1] === "\r") {
+      const opening2 = fenceOpening(text, cursor);
+      if (opening2) {
+        cursor = skipFence(text, opening2);
+        continue;
+      }
+    }
+    if (text[cursor] === "`" && !escapedAt(text, cursor)) {
+      const openingEnd = backtickRunEnd(text, cursor);
+      const end = inlineCodeEnd(text, cursor, openingEnd);
+      cursor = end < 0 ? openingEnd : end;
+      continue;
+    }
+    let opening = cursor;
+    if (text[cursor] === "!" && text[cursor + 1] === "[") {
+      if (escapedAt(text, cursor)) {
+        cursor += 1;
+        continue;
+      }
+      opening += 1;
+    } else if (text[cursor] !== "[" || text[cursor - 1] === "!" || escapedAt(text, cursor)) {
+      cursor += 1;
+      continue;
+    }
+    const link = parseLink(text, opening);
+    if (link) {
+      const destination = text.slice(link.destinationStart, link.destinationEnd);
+      if (/^[a-z]:[\\/]/i.test(destination) && destination.includes("\\")) {
+        output += text.slice(copied, link.destinationStart);
+        output += destination.replace(/\\+/g, "/");
+        copied = link.destinationEnd;
+      }
+      cursor = link.end;
+      continue;
+    }
+    cursor += 1;
+  }
+  return copied === 0 ? text : output + text.slice(copied);
+}
 function linkMentions(text, bots, selfId) {
   if (!text || !text.includes("@")) return text;
   let out = "";
@@ -1948,7 +2164,7 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 @media (prefers-reduced-motion:reduce){.bt-connect-tip{animation:none}}
 
 .bt-head{position:relative;display:flex;justify-content:center;align-items:center;height:40px;flex:none;pointer-events:none}
-.bt-pill{pointer-events:auto;display:inline-flex;align-items:center;gap:8px;height:40px;padding:7.5px 13.5px 7.5px 7.5px;border-radius:999px;background:var(--bt-main);border:.5px solid var(--bt-line-2);box-shadow:0 2px 8px -1px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);color:var(--bt-ink);font-family:inherit;font-size:14px;line-height:20px;cursor:pointer;max-width:70%;box-sizing:border-box;transition:background-color .12s ease,transform ${SPRING_TAP.duration}ms ${SPRING_TAP.easing}}
+.bt-pill{pointer-events:auto;display:inline-flex;align-items:center;gap:8px;height:40px;padding:7.5px 13.5px 7.5px 7.5px;border-radius:20px;background:var(--bt-main);border:.5px solid var(--bt-line-2);box-shadow:0 2px 8px -1px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);color:var(--bt-ink);font-family:inherit;font-size:14px;line-height:20px;cursor:pointer;max-width:70%;box-sizing:border-box;transition:background-color .12s ease,border-radius 160ms ease-out,transform ${SPRING_TAP.duration}ms ${SPRING_TAP.easing}}
 .bt-pill:hover{background:color-mix(in srgb,var(--bt-main),#777 9%)}
 .bt-pill:active{transform:scale(.965)}
 .bt-pill-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
@@ -1959,18 +2175,22 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-pill-status-time{flex:none;font-size:11px;color:var(--bt-ink-3)}
 .bt-pill-hover{position:relative;display:inline-flex;pointer-events:auto;min-width:0;max-width:70%}
 .bt-pill-hover>.bt-pill{max-width:100%;width:100%}
-.bt-pill-hover[data-runtime-open]>.bt-pill{border-radius:16px 16px 0 0;box-shadow:none;background:var(--bt-main);transform:none}
-.bt-runtime-popover{position:absolute;top:100%;left:0;width:100%;padding-top:0;box-sizing:border-box;z-index:80;pointer-events:auto}
+.bt-pill-hover[data-runtime-expanded]{min-width:min(320px,100%);max-width:100%}
+.bt-pill-hover[data-runtime-open]>.bt-pill{box-shadow:none;background:var(--bt-main);transform:none}
+.bt-pill-hover[data-runtime-expanded]>.bt-pill{border-radius:16px 16px 0 0}
+.bt-runtime-popover{position:absolute;top:100%;left:0;width:100%;padding-top:0;box-sizing:border-box;z-index:80;clip-path:inset(0 0 100% 0);opacity:0;transform:translateY(-6px);pointer-events:none;transition:clip-path var(--bt-runtime-transition-duration,${SPRING_STRETCH.duration}ms) var(--bt-runtime-transition-easing,${SPRING_STRETCH.easing}),transform var(--bt-runtime-transition-duration,${SPRING_STRETCH.duration}ms) var(--bt-runtime-transition-easing,${SPRING_STRETCH.easing}),opacity 160ms ease}
+.bt-runtime-popover[data-runtime-expanded]{clip-path:inset(0);opacity:1;transform:none;pointer-events:auto}
 .bt-runtime-card{box-sizing:border-box;max-height:var(--bt-runtime-max-height,400px);overflow-y:auto;padding:12px;border:.5px solid var(--bt-line-2);border-top:0;border-radius:0 0 16px 16px;min-width:0;background:var(--bt-main);color:var(--bt-ink);box-shadow:0 8px 24px -4px rgba(0,0,0,.14);font-size:13px;line-height:1.45}
 .bt-runtime-title{margin:0 0 8px;color:var(--bt-ink);font-size:12px;font-weight:600;line-height:18px}
 .bt-runtime-row{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);gap:4px 12px;align-items:start;min-width:0}
 .bt-runtime-row+.bt-runtime-row{margin-top:5px}
-.bt-runtime-label{min-width:0;color:var(--bt-ink-2);font-size:12px;line-height:17px}
+.bt-runtime-label{min-width:0;color:var(--bt-ink-2);font-size:12px;line-height:17px;white-space:nowrap}
 .bt-runtime-value{min-width:0;overflow-wrap:anywhere;color:var(--bt-ink);font-size:13px;line-height:18px}
 .bt-runtime-activity-list{display:grid;gap:6px;margin:8px 0 0;padding:8px 0 0;border-top:.5px solid var(--bt-line-2);list-style:none}
 .bt-runtime-activity-item{display:flex;flex-direction:column;gap:2px;min-width:0;overflow-wrap:anywhere}
 .bt-runtime-activity-label{color:var(--bt-ink);font-size:13px;line-height:18px}
 .bt-runtime-activity-started{color:var(--bt-ink-2);font-size:12px;line-height:17px}
+@media(prefers-reduced-motion:reduce){.bt-runtime-popover{transition:none}}
 @media(max-width:620px){.bt-pill-status{max-width:160px}}
 .bt-pill-mem{flex:none;display:inline-flex;width:0;margin-left:-8px;overflow:hidden;transition:${spring(SPRING_SHAPE, "width", "margin-left")}}
 .bt-pill[data-memory=updated] .bt-pill-mem{width:var(--bt-mem-w);margin-left:0;transition:${spring(SPRING_STRETCH, "width", "margin-left")}}
@@ -1985,6 +2205,7 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 @media (prefers-reduced-motion:reduce){.bt-pill-mem,.bt-pill-mem-in{transition:none!important}.bt-pill-mem-in{filter:none;transform:none}.bt-pill[data-memory=updated] .bt-pill-mem-ico{animation:none}}
 .bt-swap{color:var(--bt-ink-3);font-size:12px}
 .bt-pill-go{flex:none;display:inline-flex;align-items:center;justify-content:flex-end;width:0;margin-left:-8px;overflow:hidden;opacity:0;filter:blur(6px);transform:translateX(-6px);color:var(--bt-ink-2);transition:width ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},margin-left ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},transform ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},opacity .18s ease,filter .18s ease}
+.bt-pill-hover .bt-pill-go{transition:${spring(SPRING_SHAPE, "transform")},opacity .18s ease,filter .18s ease}
 .bt-pill-go svg{flex:none;transition:transform ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
 .bt-pill:hover .bt-pill-go,.bt-pill:focus-visible .bt-pill-go,.bt-pill[aria-expanded=true] .bt-pill-go{width:18px;margin-left:0;opacity:1;filter:none;transform:none}
 .bt-pill[aria-expanded=true] .bt-pill-go svg{transform:rotate(180deg)}
@@ -1997,6 +2218,8 @@ html body[data-ds-dark-theme]{--bt-chat-user-bg:color-mix(in srgb,var(--bt-main)
 .bt-bubble{max-width:100%;background:transparent;color:var(--bt-ink);border-radius:0;padding:7px 0;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 8px);box-sizing:border-box;overflow-wrap:anywhere}
 .bt-bubble [class*="_markdown"]>*+*{margin-top:10px}
 .bt-bubble [class*="_markdown"]{color:inherit!important;font-size:inherit!important;line-height:inherit!important}
+.bt-bubble pre{font-size:max(15px,var(--dsh-content-font-size,14px));line-height:1.6}
+.bt-bubble pre code{font-size:inherit;line-height:inherit}
 .bt-bubble p{margin:0}
 .bt-bubble p + p{margin-top:6px}
 .bt-bubble ul,.bt-bubble ol{margin:4px 0;padding-left:20px}
@@ -2596,10 +2819,10 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 @media (prefers-reduced-motion:reduce){.bt-thumb{transition:none}.bt-panel-view>[data-move],.bt-drawer-name-input,.bt-veil,.bt-pop-in,.bt-token,.bt-drop,.bt-newchat,.bt-option-hint,.bt-connector-form,.bt-settings-head>*{animation:none}}`;
 var CONVERSATION_CSS = `
 .bt-think{font-size:13px;line-height:18px;color:var(--bt-ink-2);margin:2px 0 4px;max-width:min(560px,78%)}
-.bt-think summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px}
+.bt-think summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px;padding:0;font-family:inherit;font-size:var(--dsh-content-font-size-secondary,13px);height:calc(24px + var(--dsh-content-font-delta,0px));line-height:calc(24px + var(--dsh-content-font-delta,0px))}
 .bt-think summary::-webkit-details-marker{display:none}
 .bt-thinking-header{min-width:0;max-width:100%}
-.bt-thinking-icon{flex:none;width:14px;height:14px;opacity:.8}
+.bt-thinking-icon{flex:none;width:calc(14px + var(--dsh-content-font-delta,0px));height:calc(14px + var(--dsh-content-font-delta,0px));margin-inline:1px;opacity:.8}
 .bt-thinking-chevron{font-size:18px;line-height:18px;flex:none;transform:rotate(0deg)}
 details[open]>summary>.bt-thinking-chevron{transform:rotate(90deg)}
 .bt-think-text{white-space:pre-wrap;margin-top:6px;padding-left:10px;border-left:2px solid var(--bt-line-2)}
@@ -2720,6 +2943,7 @@ header[class*="_header"] .bt-head{flex:1 1 auto;width:100%}
 [data-composer-card] button[class*="_primary"] svg{width:14px;height:14px}
 [data-composer-card] button[class*="_primary"]:disabled{display:none!important}
 [data-composer-dock]{display:none!important}
+[data-queue-dock]{box-sizing:border-box;width:max(240px,calc(min(736px,100%) - 100px));max-width:calc(100% - 24px);padding-inline:0;margin-inline:auto}
 .bt-mic,.bt-voice{flex:none;width:28px;height:28px;border-radius:50%;border:0;padding:0;display:inline-grid;place-items:center;cursor:pointer;transition:background-color .15s ease,color .15s ease,${spring(SPRING_TAP, "scale")}}
 .bt-mic{background:color-mix(in srgb,var(--bt-ink) 5%,transparent);box-shadow:inset 0 0 0 .5px var(--bt-line);color:var(--bt-ink-2)}
 .bt-mic:hover{background:color-mix(in srgb,var(--bt-ink) 10%,transparent);color:var(--bt-ink)}
@@ -3766,12 +3990,25 @@ var texts = (step) => step.blocks.filter((block) => block.kind === "text" && blo
 var thinkingLive = (step) => step.status === "running" && texts(step).length === 0 && step.blocks.some((block) => block.kind === "reasoning");
 var stepReasoning = (step) => step.blocks.filter((block) => block.kind === "reasoning").map((block) => block.text).join("\n").trim();
 
+// src/client/work-reply.js
+function workReplyText(steps) {
+  if (!Array.isArray(steps)) return "";
+  const texts2 = [];
+  for (const step of steps) {
+    const blocks = Array.isArray(step?.blocks) ? step.blocks : [];
+    for (const block of blocks) {
+      if (block?.kind === "text" && typeof block.text === "string" && block.text.trim() !== "") texts2.push(block.text);
+    }
+  }
+  return texts2.join("\n\n");
+}
+
 // src/client/cells.js
 var import_react6 = require("react");
 var import_react_dom = require("react-dom");
 var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 var mdLabels = () => ({ code: { copyLabel: t("Copy"), copiedLabel: t("Copied") }, footnotes: t("Footnotes") });
-function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead }) {
+function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead, showTools = true }) {
   const onClick = (event) => {
     const target = mentionTarget(event);
     if (target === null) return;
@@ -3798,10 +4035,10 @@ function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId,
           (0, import_react6.createElement)(
             "div",
             { className: "bt-bubble" },
-            (0, import_react6.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: linkMentions(text, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: "compact" })
+            (0, import_react6.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: linkMentions(normalizeWindowsMarkdownPaths(text), roster.bots, selfId), streaming: live, labels: mdLabels(), variant: "compact" })
           )
         ),
-        live ? null : (0, import_react6.createElement)(MessageTools, { text, name: roster.byId[selfId]?.name ?? t("Bot"), sessionId, react: key ? (emoji) => actions.toggleReaction(msgKey, index, emoji) : void 0, actions }),
+        !showTools || live ? null : (0, import_react6.createElement)(MessageTools, { text, name: roster.byId[selfId]?.name ?? t("Bot"), sessionId, react: key ? (emoji) => actions.toggleReaction(msgKey, index, emoji) : void 0, actions }),
         picked.length ? (0, import_react6.createElement)("div", { className: "bt-reacts" }, picked.map((emoji) => (0, import_react6.createElement)("button", {
           key: emoji,
           type: "button",
@@ -3959,7 +4196,7 @@ function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSt
       });
     }),
     reasoning ? (0, import_react6.createElement)(ThinkingRow, { text: reasoning }) : null,
-    texts2.length ? (0, import_react6.createElement)(Bubbles, { texts: texts2, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi }) : null
+    texts2.length ? (0, import_react6.createElement)(Bubbles, { texts: texts2, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi, showTools: false }) : null
   );
 }
 function EventLine({ prefix, bots, joiner = t("and"), onOpen, whole = false }) {
@@ -4256,8 +4493,10 @@ function openingTurn(turns, firstTurns, hiddenTurns) {
   return listed.includes(turn) && earlier.every((entry) => hiddenTurns?.includes(entry)) ? { turn, start } : null;
 }
 var unseenSince = (visit, time) => typeof visit?.seen === "number" && time > visit.seen && time <= visit.entered;
-function TurnTailCell({ node, sessionId, useTurnClock, useUi, actions }) {
+function TurnTailCell({ node, sessionId, useRoster, useTurnSteps, useTurnClock, useUi, actions }) {
   const data = node.data;
+  const roster = useRoster((value) => value);
+  const steps = useTurnSteps(String(data.turn));
   (0, import_react6.useEffect)(() => {
     actions.noteTurnTime(sessionId, data.turn, "end", data.time);
   }, [sessionId, data.turn, data.time]);
@@ -4271,10 +4510,25 @@ function TurnTailCell({ node, sessionId, useTurnClock, useUi, actions }) {
     const start = nextTurnStart(state[sessionId] ?? {}, data.turn);
     return start !== void 0 && start > visit.seen && start <= visit.entered;
   });
-  if (!label && !fresh) return null;
+  const reply = roster.byId[sessionId] && !roster.roomsById[sessionId] && !isHiddenTurn(roster, sessionId, data.turn) ? workReplyText(steps) : "";
+  const msgKey = `${sessionId}:work:${data.turn}`;
+  const picked = useUi((state) => state.reactions?.[msgKey]?.[0] ?? []);
+  if (!label && !fresh && !reply) return null;
   return (0, import_react6.createElement)(
     import_react6.Fragment,
     null,
+    reply ? (0, import_react6.createElement)(
+      import_react6.Fragment,
+      null,
+      (0, import_react6.createElement)(MessageTools, { text: reply, name: roster.byId[sessionId]?.name ?? t("Bot"), sessionId, react: (emoji) => actions.toggleReaction(msgKey, 0, emoji), actions }),
+      picked.length ? (0, import_react6.createElement)("div", { className: "bt-reacts" }, picked.map((emoji) => (0, import_react6.createElement)("button", {
+        key: emoji,
+        type: "button",
+        className: "bt-react",
+        "aria-label": t("Remove reaction {emoji}", { emoji }),
+        onClick: () => actions.toggleReaction(msgKey, 0, emoji)
+      }, emoji))) : null
+    ) : null,
     label ? (0, import_react6.createElement)("div", { className: "bt-time-sep", role: "separator" }, label) : null,
     fresh ? (0, import_react6.createElement)(NewDivider) : null
   );
@@ -6120,6 +6374,7 @@ var import_react11 = require("react");
 var import_react_dom4 = require("react-dom");
 var GoArrow = () => (0, import_react11.createElement)("svg", { width: 14, height: 14, viewBox: "-12 -12 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.2, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, (0, import_react11.createElement)("path", { d: "M-7 0H7M2 -5L7 0L2 5" }));
 var MEMORY_NOTICE_MS = 3200;
+var RUNTIME_PANEL_EXIT_MS = SPRING_SHAPE.duration;
 var noNews = (select) => select({});
 function useMemoryNotice(ids, useMemoryNews) {
   const seen = useMemoryNews((map) => Math.max(0, ...ids.map((id) => map?.[id]?.seen ?? 0)));
@@ -6146,7 +6401,7 @@ function MemoryNotice({ shown }) {
     (0, import_react11.createElement)("span", { className: "bt-pill-mem-in", ref: inner }, (0, import_react11.createElement)("span", { className: "bt-pill-mem-ico" }, (0, import_react11.createElement)(MemoryIcon)), label)
   );
 }
-function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, panelId, style, busy = [], memberStatus = "" }) {
+function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, panelId, style, expanded, busy = [], memberStatus = "" }) {
   const liveKey = useLive((state) => JSON.stringify(state[sessionId] ?? {}));
   const entries2 = (0, import_react11.useMemo)(() => Object.entries(JSON.parse(liveKey)), [liveKey]);
   const tools = entries2.filter(([, entry]) => !entry?.text);
@@ -6163,7 +6418,17 @@ function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, panelId,
   const activities = busy.length > 0 ? memberActivities.slice(0, 4) : running ? tools.map(([id, entry]) => ({ id, entry })).sort((a, b) => (Number.isFinite(b.entry?.at) ? b.entry.at : 0) - (Number.isFinite(a.entry?.at) ? a.entry.at : 0)).slice(0, 4) : [];
   return (0, import_react11.createElement)(
     "div",
-    { id: panelId, className: "bt-runtime-popover", role: "region", "aria-label": t("Runtime details"), tabIndex: 0, style },
+    {
+      id: panelId,
+      className: "bt-runtime-popover",
+      role: "region",
+      "aria-label": t("Runtime details"),
+      "data-runtime-expanded": expanded ? "" : void 0,
+      "aria-hidden": expanded ? void 0 : true,
+      inert: expanded ? void 0 : "",
+      tabIndex: expanded ? 0 : -1,
+      style
+    },
     (0, import_react11.createElement)(
       "div",
       { className: "bt-runtime-card" },
@@ -6248,16 +6513,115 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
   }, [Boolean(room2)]);
   const memoryNotice = notice && changed !== null && roster.memory !== false;
   const hoverWrap = (0, import_react11.useRef)(null);
+  const runtimeWidth = (0, import_react11.useRef)({ sessionId: null, expanded: null, width: null, animation: null });
   const panelId = (0, import_react11.useId)();
   const [openForSession, setOpenForSession] = (0, import_react11.useState)(null);
   const [panelStyle, setPanelStyle] = (0, import_react11.useState)(null);
+  const [panelForSession, setPanelForSession] = (0, import_react11.useState)(null);
+  const [expandedForSession, setExpandedForSession] = (0, import_react11.useState)(null);
   const open = openForSession === sessionId;
+  const mounted = open || panelForSession === sessionId;
+  const expanded = open && expandedForSession === sessionId;
+  const rememberRuntimeWidth = () => {
+    const wrapper = hoverWrap.current;
+    const state = runtimeWidth.current;
+    if (wrapper && state.sessionId === sessionId && !state.animation) state.width = wrapper.getBoundingClientRect().width;
+  };
+  const animateRuntimeWidth = (wrapper, from, to, state) => {
+    state.width = to;
+    if (typeof wrapper.animate !== "function" || Math.abs(from - to) < 1 || reducedMotion()) return;
+    const curve = state.expanded ? SPRING_STRETCH : SPRING_SHAPE;
+    const animation = wrapper.animate([
+      { width: `${from}px`, minWidth: "0px", maxWidth: "100%" },
+      { width: `${to}px`, minWidth: "0px", maxWidth: "100%" }
+    ], { duration: curve.duration, easing: curve.easing, fill: "none" });
+    state.animation = animation;
+    animation.onfinish = () => {
+      if (state.animation !== animation) return;
+      state.animation = null;
+      state.width = wrapper.getBoundingClientRect().width;
+    };
+  };
+  (0, import_react11.useLayoutEffect)(() => {
+    const wrapper = hoverWrap.current;
+    if (!wrapper) return;
+    const state = runtimeWidth.current;
+    const sameSession = state.sessionId === sessionId;
+    if (sameSession && state.expanded === expanded) {
+      if (!state.animation) state.width = wrapper.getBoundingClientRect().width;
+      return;
+    }
+    const shouldAnimate = sameSession && state.expanded !== null && state.expanded !== expanded;
+    const from = state.animation ? wrapper.getBoundingClientRect().width : sameSession ? state.width : null;
+    state.animation?.cancel();
+    state.animation = null;
+    const to = wrapper.getBoundingClientRect().width;
+    state.sessionId = sessionId;
+    state.expanded = expanded;
+    state.width = to;
+    if (shouldAnimate && from !== null) animateRuntimeWidth(wrapper, from, to, state);
+  });
+  (0, import_react11.useLayoutEffect)(() => {
+    const wrapper = hoverWrap.current;
+    const head = wrapper?.parentElement;
+    if (!head || typeof ResizeObserver !== "function") return void 0;
+    let headWidth = head.getBoundingClientRect().width;
+    const observer = new ResizeObserver((entries2) => {
+      const nextWidth = entries2.find((entry) => entry.target === head)?.contentRect.width ?? head.getBoundingClientRect().width;
+      if (Math.abs(nextWidth - headWidth) < 1) return;
+      headWidth = nextWidth;
+      const state = runtimeWidth.current;
+      if (!state.animation) {
+        state.width = wrapper.getBoundingClientRect().width;
+        return;
+      }
+      const from = wrapper.getBoundingClientRect().width;
+      state.animation.cancel();
+      state.animation = null;
+      const to = wrapper.getBoundingClientRect().width;
+      animateRuntimeWidth(wrapper, from, to, state);
+    });
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, [sessionId]);
+  (0, import_react11.useLayoutEffect)(() => () => {
+    const state = runtimeWidth.current;
+    state.animation?.cancel();
+    state.animation = null;
+  }, []);
   (0, import_react11.useEffect)(() => {
     setOpenForSession(null);
+    setPanelForSession(null);
+    setExpandedForSession(null);
+    setPanelStyle(null);
   }, [sessionId]);
+  (0, import_react11.useEffect)(() => {
+    if (open) {
+      setPanelForSession(sessionId);
+      let firstFrame = null;
+      let secondFrame = null;
+      firstFrame = window.requestAnimationFrame(() => {
+        firstFrame = null;
+        secondFrame = window.requestAnimationFrame(() => {
+          secondFrame = null;
+          setExpandedForSession(sessionId);
+        });
+      });
+      return () => {
+        if (firstFrame !== null) window.cancelAnimationFrame(firstFrame);
+        if (secondFrame !== null) window.cancelAnimationFrame(secondFrame);
+      };
+    }
+    if (!mounted) return void 0;
+    const timer = window.setTimeout(() => {
+      setPanelForSession((current) => current === sessionId ? null : current);
+    }, RUNTIME_PANEL_EXIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [open, sessionId, mounted]);
   (0, import_react11.useLayoutEffect)(() => {
     if (!open) {
-      setPanelStyle(null);
+      setExpandedForSession((current) => current === sessionId ? null : current);
+      if (!mounted) setPanelStyle(null);
       return void 0;
     }
     const measure = () => {
@@ -6270,7 +6634,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, [open]);
+  }, [open, mounted, sessionId]);
   return (0, import_react11.createElement)(
     "div",
     { className: "bt-head" },
@@ -6278,17 +6642,35 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
       "div",
       {
         className: "bt-pill-hover",
-        "data-runtime-open": open ? "" : void 0,
+        "data-runtime-open": mounted ? "" : void 0,
         ref: hoverWrap,
-        onPointerEnter: () => setOpenForSession(sessionId),
-        onPointerLeave: () => setOpenForSession((current) => current === sessionId ? null : current),
-        onFocusCapture: () => setOpenForSession(sessionId),
+        "data-runtime-expanded": expanded ? "" : void 0,
+        style: {
+          "--bt-runtime-transition-duration": `${expanded ? SPRING_STRETCH.duration : SPRING_SHAPE.duration}ms`,
+          "--bt-runtime-transition-easing": expanded ? SPRING_STRETCH.easing : SPRING_SHAPE.easing
+        },
+        onPointerEnter: () => {
+          rememberRuntimeWidth();
+          setOpenForSession(sessionId);
+        },
+        onPointerLeave: () => {
+          rememberRuntimeWidth();
+          setOpenForSession((current) => current === sessionId ? null : current);
+        },
+        onFocusCapture: () => {
+          rememberRuntimeWidth();
+          setOpenForSession(sessionId);
+        },
         onBlurCapture: (event) => {
-          if (!event.currentTarget.contains(event.relatedTarget)) setOpenForSession((current) => current === sessionId ? null : current);
+          if (!event.currentTarget.contains(event.relatedTarget)) {
+            rememberRuntimeWidth();
+            setOpenForSession((current) => current === sessionId ? null : current);
+          }
         },
         onKeyDown: (event) => {
           if (open && event.key === "Escape") {
             event.stopPropagation();
+            rememberRuntimeWidth();
             setOpenForSession(null);
           }
         }
@@ -6300,7 +6682,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
           className: "bt-pill",
           "aria-expanded": detailsOpen,
           "data-memory": memoryNotice ? "updated" : void 0,
-          "aria-describedby": open ? panelId : void 0,
+          "aria-describedby": expanded ? panelId : void 0,
           "aria-label": memoryNotice ? t("Memory updated. Open {name}'s memory", { name: roster.byId[changed]?.name ?? name }) : t("View conversation details"),
           onClick: () => memoryNotice ? actions.openMemory(changed) : actions.toggleDetails(sessionId)
         },
@@ -6310,7 +6692,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
         (0, import_react11.createElement)(MemoryNotice, { shown: memoryNotice }),
         (0, import_react11.createElement)("span", { className: "bt-pill-go", "aria-hidden": true }, (0, import_react11.createElement)(GoArrow))
       ),
-      open && panelStyle ? (0, import_react11.createElement)(RuntimeStatusPanel, { sessionId, bot, roster, running, useLive, panelId, style: panelStyle, busy, memberStatus }) : null
+      mounted && panelStyle ? (0, import_react11.createElement)(RuntimeStatusPanel, { sessionId, bot, roster, running, useLive, panelId, style: panelStyle, expanded, busy, memberStatus }) : null
     ),
     (0, import_react11.createElement)("span", { className: "bt-sr", role: "status" }, memoryNotice ? t("Memory updated") : ""),
     (0, import_react11.createElement)(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock })
@@ -14078,7 +14460,7 @@ function apply(ctx) {
     shadow("conversation.chat.node", { key: "turn-trigger", priority: -10, locale: "chat", inject: face }, TriggerCell),
     shadow("conversation.chat.node", { key: "tool-call", priority: -10, locale: "chat", inject: face }, ToolCell),
     shadow("conversation.chat.node", { key: "turn-process", priority: -10, locale: "chat", inject: face }, TurnProcessCell),
-    shadow("conversation.chat.node", { key: "turn-tail", priority: -10, locale: "chat", inject: face }, TurnTailCell),
+    shadow("conversation.chat.node", { key: "turn-tail", priority: -10, locale: "chat", inject: assistantFace }, TurnTailCell),
     // A Bot condenses its conversation without telling anyone; the chat keeps showing
     // every message.
     shadow("conversation.chat.node", { key: "question-reply", priority: -10, locale: "chat" }, AnsweredCell),

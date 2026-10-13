@@ -8,6 +8,7 @@ import { clockLabel, openingTurn, unseenSince, Shimmer, workPhrase } from './cel
 import { modelOf } from './model-menu.js'
 import { NO_WORK, busyMembers, summaryText } from './member-status.js'
 import { dateLocale, t } from './i18n.js'
+import { SPRING_SHAPE, SPRING_STRETCH, reducedMotion } from './motion.js'
 
 // -------------------------------------------------------------------------
 // Conversation header
@@ -17,6 +18,7 @@ const GoArrow = () => h('svg', { width: 14, height: 14, viewBox: '-12 -12 24 24'
 
 // How long the pill says "Memory updated" after the change reaches this window.
 const MEMORY_NOTICE_MS = 3_200
+const RUNTIME_PANEL_EXIT_MS = SPRING_SHAPE.duration
 const noNews = select => select({})
 
 // True while the latest memory change of the Bots in this conversation is news.
@@ -44,7 +46,7 @@ function MemoryNotice({ shown }) {
     h('span', { className: 'bt-pill-mem-in', ref: inner }, h('span', { className: 'bt-pill-mem-ico' }, h(MemoryIcon)), label))
 }
 
-function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, panelId, style, busy = [], memberStatus = '' }) {
+function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, panelId, style, expanded, busy = [], memberStatus = '' }) {
   const liveKey = useLive(state => JSON.stringify(state[sessionId] ?? {}))
   const entries = useMemo(() => Object.entries(JSON.parse(liveKey)), [liveKey])
   const tools = entries.filter(([, entry]) => !entry?.text)
@@ -66,7 +68,11 @@ function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, panelId,
     : running ? tools.map(([id, entry]) => ({ id, entry }))
       .sort((a, b) => (Number.isFinite(b.entry?.at) ? b.entry.at : 0) - (Number.isFinite(a.entry?.at) ? a.entry.at : 0)).slice(0, 4)
       : []
-  return h('div', { id: panelId, className: 'bt-runtime-popover', role: 'region', 'aria-label': t('Runtime details'), tabIndex: 0, style },
+  return h('div', {
+    id: panelId, className: 'bt-runtime-popover', role: 'region', 'aria-label': t('Runtime details'),
+    'data-runtime-expanded': expanded ? '' : undefined, 'aria-hidden': expanded ? undefined : true,
+    inert: expanded ? undefined : '', tabIndex: expanded ? 0 : -1, style,
+  },
     h('div', { className: 'bt-runtime-card' },
       h('div', { className: 'bt-runtime-title' }, t('Runtime details')),
       h('div', { className: 'bt-runtime-row' },
@@ -136,13 +142,119 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
   }, [Boolean(room)])
   const memoryNotice = notice && changed !== null && roster.memory !== false
   const hoverWrap = useRef(null)
+  const runtimeWidth = useRef({ sessionId: null, expanded: null, width: null, animation: null })
   const panelId = useId()
   const [openForSession, setOpenForSession] = useState(null)
   const [panelStyle, setPanelStyle] = useState(null)
+  const [panelForSession, setPanelForSession] = useState(null)
+  const [expandedForSession, setExpandedForSession] = useState(null)
   const open = openForSession === sessionId
-  useEffect(() => { setOpenForSession(null) }, [sessionId])
+  const mounted = open || panelForSession === sessionId
+  const expanded = open && expandedForSession === sessionId
+  const rememberRuntimeWidth = () => {
+    const wrapper = hoverWrap.current
+    const state = runtimeWidth.current
+    if (wrapper && state.sessionId === sessionId && !state.animation) state.width = wrapper.getBoundingClientRect().width
+  }
+  const animateRuntimeWidth = (wrapper, from, to, state) => {
+    state.width = to
+    if (typeof wrapper.animate !== 'function' || Math.abs(from - to) < 1 || reducedMotion()) return
+    const curve = state.expanded ? SPRING_STRETCH : SPRING_SHAPE
+    const animation = wrapper.animate([
+      { width: `${from}px`, minWidth: '0px', maxWidth: '100%' },
+      { width: `${to}px`, minWidth: '0px', maxWidth: '100%' },
+    ], { duration: curve.duration, easing: curve.easing, fill: 'none' })
+    state.animation = animation
+    animation.onfinish = () => {
+      if (state.animation !== animation) return
+      state.animation = null
+      state.width = wrapper.getBoundingClientRect().width
+    }
+  }
   useLayoutEffect(() => {
-    if (!open) { setPanelStyle(null); return undefined }
+    const wrapper = hoverWrap.current
+    if (!wrapper) return
+    const state = runtimeWidth.current
+    const sameSession = state.sessionId === sessionId
+    if (sameSession && state.expanded === expanded) {
+      if (!state.animation) state.width = wrapper.getBoundingClientRect().width
+      return
+    }
+    const shouldAnimate = sameSession && state.expanded !== null && state.expanded !== expanded
+    const from = state.animation
+      ? wrapper.getBoundingClientRect().width
+      : sameSession ? state.width : null
+    state.animation?.cancel()
+    state.animation = null
+    const to = wrapper.getBoundingClientRect().width
+    state.sessionId = sessionId
+    state.expanded = expanded
+    state.width = to
+    if (shouldAnimate && from !== null) animateRuntimeWidth(wrapper, from, to, state)
+  })
+  useLayoutEffect(() => {
+    const wrapper = hoverWrap.current
+    const head = wrapper?.parentElement
+    if (!head || typeof ResizeObserver !== 'function') return undefined
+    let headWidth = head.getBoundingClientRect().width
+    const observer = new ResizeObserver(entries => {
+      const nextWidth = entries.find(entry => entry.target === head)?.contentRect.width ?? head.getBoundingClientRect().width
+      if (Math.abs(nextWidth - headWidth) < 1) return
+      headWidth = nextWidth
+      const state = runtimeWidth.current
+      if (!state.animation) {
+        state.width = wrapper.getBoundingClientRect().width
+        return
+      }
+      const from = wrapper.getBoundingClientRect().width
+      state.animation.cancel()
+      state.animation = null
+      const to = wrapper.getBoundingClientRect().width
+      animateRuntimeWidth(wrapper, from, to, state)
+    })
+    observer.observe(head)
+    return () => observer.disconnect()
+  }, [sessionId])
+  useLayoutEffect(() => () => {
+    const state = runtimeWidth.current
+    state.animation?.cancel()
+    state.animation = null
+  }, [])
+  useEffect(() => {
+    setOpenForSession(null)
+    setPanelForSession(null)
+    setExpandedForSession(null)
+    setPanelStyle(null)
+  }, [sessionId])
+  useEffect(() => {
+    if (open) {
+      setPanelForSession(sessionId)
+      let firstFrame = null
+      let secondFrame = null
+      firstFrame = window.requestAnimationFrame(() => {
+        firstFrame = null
+        secondFrame = window.requestAnimationFrame(() => {
+          secondFrame = null
+          setExpandedForSession(sessionId)
+        })
+      })
+      return () => {
+        if (firstFrame !== null) window.cancelAnimationFrame(firstFrame)
+        if (secondFrame !== null) window.cancelAnimationFrame(secondFrame)
+      }
+    }
+    if (!mounted) return undefined
+    const timer = window.setTimeout(() => {
+      setPanelForSession(current => current === sessionId ? null : current)
+    }, RUNTIME_PANEL_EXIT_MS)
+    return () => window.clearTimeout(timer)
+  }, [open, sessionId, mounted])
+  useLayoutEffect(() => {
+    if (!open) {
+      setExpandedForSession(current => current === sessionId ? null : current)
+      if (!mounted) setPanelStyle(null)
+      return undefined
+    }
     const measure = () => {
       const wrapper = hoverWrap.current
       if (!wrapper) return
@@ -153,19 +265,35 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     measure()
     window.addEventListener('resize', measure)
     return () => window.removeEventListener('resize', measure)
-  }, [open])
+  }, [open, mounted, sessionId])
   return h('div', { className: 'bt-head' },
     h('div', {
-      className: 'bt-pill-hover', 'data-runtime-open': open ? '' : undefined, ref: hoverWrap,
-      onPointerEnter: () => setOpenForSession(sessionId),
-      onPointerLeave: () => setOpenForSession(current => current === sessionId ? null : current),
-      onFocusCapture: () => setOpenForSession(sessionId),
-      onBlurCapture: event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpenForSession(current => current === sessionId ? null : current) },
-      onKeyDown: event => { if (open && event.key === 'Escape') { event.stopPropagation(); setOpenForSession(null) } },
+      className: 'bt-pill-hover', 'data-runtime-open': mounted ? '' : undefined, ref: hoverWrap,
+      'data-runtime-expanded': expanded ? '' : undefined,
+      style: {
+        '--bt-runtime-transition-duration': `${expanded ? SPRING_STRETCH.duration : SPRING_SHAPE.duration}ms`,
+        '--bt-runtime-transition-easing': expanded ? SPRING_STRETCH.easing : SPRING_SHAPE.easing,
+      },
+      onPointerEnter: () => { rememberRuntimeWidth(); setOpenForSession(sessionId) },
+      onPointerLeave: () => { rememberRuntimeWidth(); setOpenForSession(current => current === sessionId ? null : current) },
+      onFocusCapture: () => { rememberRuntimeWidth(); setOpenForSession(sessionId) },
+      onBlurCapture: event => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          rememberRuntimeWidth()
+          setOpenForSession(current => current === sessionId ? null : current)
+        }
+      },
+      onKeyDown: event => {
+        if (open && event.key === 'Escape') {
+          event.stopPropagation()
+          rememberRuntimeWidth()
+          setOpenForSession(null)
+        }
+      },
     },
     h('button', {
       type: 'button', className: 'bt-pill', 'aria-expanded': detailsOpen, 'data-memory': memoryNotice ? 'updated' : undefined,
-      'aria-describedby': open ? panelId : undefined,
+      'aria-describedby': expanded ? panelId : undefined,
       'aria-label': memoryNotice ? t("Memory updated. Open {name}'s memory", { name: roster.byId[changed]?.name ?? name }) : t('View conversation details'),
       onClick: () => (memoryNotice ? actions.openMemory(changed) : actions.toggleDetails(sessionId)),
     },
@@ -176,7 +304,7 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
       : h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, actions }),
     h(MemoryNotice, { shown: memoryNotice }),
     h('span', { className: 'bt-pill-go', 'aria-hidden': true }, h(GoArrow))),
-    open && panelStyle ? h(RuntimeStatusPanel, { sessionId, bot, roster, running, useLive, panelId, style: panelStyle, busy, memberStatus }) : null),
+    mounted && panelStyle ? h(RuntimeStatusPanel, { sessionId, bot, roster, running, useLive, panelId, style: panelStyle, expanded, busy, memberStatus }) : null),
     h('span', { className: 'bt-sr', role: 'status' }, memoryNotice ? t('Memory updated') : ''),
     h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }))
 }

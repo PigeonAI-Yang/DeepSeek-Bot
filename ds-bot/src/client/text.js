@@ -5,6 +5,214 @@ import { mentionSpans } from '../shared/mentions.js'
 
 export const MENTION_ORIGIN = 'https://bots.local/'
 
+function lineEnd(text, start) {
+  let end = start
+  while (end < text.length && text[end] !== '\n' && text[end] !== '\r') end += 1
+  return end
+}
+
+function afterLine(text, end) {
+  if (end === text.length) return end
+  return end + (text[end] === '\r' && text[end + 1] === '\n' ? 2 : 1)
+}
+
+function fenceOpening(text, start) {
+  let cursor = start
+  let spaces = 0
+  while (text[cursor] === ' ' && spaces < 4) { cursor += 1; spaces += 1 }
+  if (spaces > 3) return null
+  const marker = text[cursor]
+  if (marker !== '`' && marker !== '~') return null
+  const runStart = cursor
+  while (text[cursor] === marker) cursor += 1
+  if (cursor - runStart < 3) return null
+  const end = lineEnd(text, cursor)
+  if (marker === '`' && text.slice(cursor, end).includes('`')) return null
+  return { marker, length: cursor - runStart, lineEnd: end }
+}
+
+function closingFenceEnd(text, start, fence) {
+  let cursor = start
+  let spaces = 0
+  while (text[cursor] === ' ' && spaces < 4) { cursor += 1; spaces += 1 }
+  if (spaces > 3 || text[cursor] !== fence.marker) return null
+  const runStart = cursor
+  while (text[cursor] === fence.marker) cursor += 1
+  if (cursor - runStart < fence.length) return null
+  const end = lineEnd(text, cursor)
+  while (cursor < end && (text[cursor] === ' ' || text[cursor] === '\t')) cursor += 1
+  return cursor === end ? end : null
+}
+
+function skipFence(text, opening) {
+  let start = afterLine(text, opening.lineEnd)
+  while (start < text.length) {
+    const end = closingFenceEnd(text, start, opening)
+    if (end !== null) return afterLine(text, end)
+    start = afterLine(text, lineEnd(text, start))
+  }
+  return text.length
+}
+
+function escapedAt(text, index) {
+  let slashes = 0
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === '\\'; cursor -= 1) slashes += 1
+  return slashes % 2 === 1
+}
+
+function backtickRunEnd(text, start) {
+  let end = start
+  while (text[end] === '`') end += 1
+  return end
+}
+
+function inlineCodeEnd(text, start, openingEnd) {
+  const length = openingEnd - start
+  let cursor = openingEnd
+  while (cursor < text.length) {
+    if (text[cursor] !== '`') { cursor += 1; continue }
+    const end = backtickRunEnd(text, cursor)
+    if (end - cursor === length) return end
+    cursor = end
+  }
+  return -1
+}
+
+function labelEnd(text, opening) {
+  let depth = 1
+  for (let cursor = opening + 1; cursor < text.length; cursor += 1) {
+    if (text[cursor] === '\\') { cursor += 1; continue }
+    if (text[cursor] === '[') depth += 1
+    if (text[cursor] === ']' && --depth === 0) return cursor
+  }
+  return -1
+}
+
+function titleEnd(text, start, quote) {
+  let cursor = start + 1
+  while (cursor < text.length) {
+    if (text[cursor] === '\r' || text[cursor] === '\n') return -1
+    if (text[cursor] === '\\') { cursor += 2; continue }
+    if (text[cursor] === quote) return cursor + 1
+    cursor += 1
+  }
+  return -1
+}
+
+function parenthesizedTitleEnd(text, start) {
+  let depth = 1
+  for (let cursor = start + 1; cursor < text.length; cursor += 1) {
+    if (text[cursor] === '\r' || text[cursor] === '\n') return -1
+    if (text[cursor] === '\\') { cursor += 1; continue }
+    if (text[cursor] === '(') depth += 1
+    if (text[cursor] === ')' && --depth === 0) return cursor + 1
+  }
+  return -1
+}
+
+function linkSyntaxEnd(text, cursor) {
+  if (text[cursor] === ')') return cursor + 1
+  const spaced = cursor
+  while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1
+  if (cursor === spaced) return null
+  if (text[cursor] === ')') return cursor + 1
+  if (text[cursor] === '"' || text[cursor] === "'") cursor = titleEnd(text, cursor, text[cursor])
+  else if (text[cursor] === '(') cursor = parenthesizedTitleEnd(text, cursor)
+  else return null
+  if (cursor < 0) return null
+  while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1
+  return text[cursor] === ')' ? cursor + 1 : null
+}
+
+function parseLink(text, opening) {
+  const labelEndIndex = labelEnd(text, opening)
+  if (labelEndIndex < 0 || text[labelEndIndex + 1] !== '(') return null
+  let cursor = labelEndIndex + 2
+  while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1
+  const angled = text[cursor] === '<'
+  const destinationStart = angled ? cursor + 1 : cursor
+  cursor = destinationStart
+  let depth = 0
+
+  if (angled) {
+    while (cursor < text.length) {
+      const character = text[cursor]
+      if (character === '\r' || character === '\n' || character === '<') return null
+      if (character === '\\') {
+        if (text[cursor + 1] === '\r' || text[cursor + 1] === '\n') return null
+        cursor += 2
+        continue
+      }
+      if (character === '>') break
+      cursor += 1
+    }
+    if (text[cursor] !== '>') return null
+    const destinationEnd = cursor
+    const end = linkSyntaxEnd(text, cursor + 1)
+    return end === null ? null : { destinationStart, destinationEnd, end }
+  }
+
+  while (cursor < text.length) {
+    const character = text[cursor]
+    if (character === ' ' || character === '\t' || character === '\r' || character === '\n') break
+    if (character === '\\') {
+      const escaped = text[cursor + 1]
+      if (escaped === '(' || escaped === ')') return null
+      if (escaped === undefined || escaped === '\r' || escaped === '\n') return null
+      cursor += 2
+      continue
+    }
+    if (character === '(') depth += 1
+    if (character === ')') {
+      if (depth === 0) return { destinationStart, destinationEnd: cursor, end: cursor + 1 }
+      depth -= 1
+    }
+    cursor += 1
+  }
+  if (depth !== 0) return null
+  const end = linkSyntaxEnd(text, cursor)
+  return end === null ? null : { destinationStart, destinationEnd: cursor, end }
+}
+
+export function normalizeWindowsMarkdownPaths(text) {
+  if (typeof text !== 'string' || !text.includes('[') || !text.includes('\\')) return text
+  let output = ''
+  let copied = 0
+  for (let cursor = 0; cursor < text.length;) {
+    if ((cursor === 0 || text[cursor - 1] === '\n' || text[cursor - 1] === '\r')) {
+      const opening = fenceOpening(text, cursor)
+      if (opening) { cursor = skipFence(text, opening); continue }
+    }
+    if (text[cursor] === '`' && !escapedAt(text, cursor)) {
+      const openingEnd = backtickRunEnd(text, cursor)
+      const end = inlineCodeEnd(text, cursor, openingEnd)
+      cursor = end < 0 ? openingEnd : end
+      continue
+    }
+    let opening = cursor
+    if (text[cursor] === '!' && text[cursor + 1] === '[') {
+      if (escapedAt(text, cursor)) { cursor += 1; continue }
+      opening += 1
+    } else if (text[cursor] !== '[' || text[cursor - 1] === '!' || escapedAt(text, cursor)) {
+      cursor += 1
+      continue
+    }
+    const link = parseLink(text, opening)
+    if (link) {
+      const destination = text.slice(link.destinationStart, link.destinationEnd)
+      if (/^[a-z]:[\\/]/i.test(destination) && destination.includes('\\')) {
+        output += text.slice(copied, link.destinationStart)
+        output += destination.replace(/\\+/g, '/')
+        copied = link.destinationEnd
+      }
+      cursor = link.end
+      continue
+    }
+    cursor += 1
+  }
+  return copied === 0 ? text : output + text.slice(copied)
+}
+
 // The Bots a text calls, by the rule the group host reads (shared/mentions.js). The
 // speaker's own name takes part so that it is never read as a shorter name inside it
 // ("@新 Bot" in "@新 Bot 2"); it then stays plain text.
