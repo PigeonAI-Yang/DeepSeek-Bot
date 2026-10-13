@@ -17,7 +17,7 @@ DeepSeek Bot (DS Bot) is a bot plugin for [DeepSeek Harness](https://github.com/
 
 This repository is [PigeonAI-Yang/DeepSeek-Bot](https://github.com/PigeonAI-Yang/DeepSeek-Bot). It includes the Windows Desktop changes described in [Desktop customizations](docs/desktop-customizations.md). To install this fork in DSH Desktop, enter `github:PigeonAI-Yang/DeepSeek-Bot#main&path:/ds-bot` as the plugin address.
 
-The inherited `ds-bot` package version is `0.1.2`. The local Desktop-modified package is `0.1.3`, and this fork has no release. The generated client comes from `ds-bot/src/client`; keep using the existing `npm run build` workflow in `ds-bot/`.
+The fork uses `ds-bot` package version `0.1.4`. Its Windows Desktop customizations include a DS Bot-branded application menu and a cloud update control in the title bar. The generated client comes from `ds-bot/src/client`; keep using the existing `npm run build` workflow in `ds-bot/`.
 
 ![Say one sentence to Chief, and it sets up the bots and the group chat](docs/images/team.png)
 
@@ -31,7 +31,7 @@ First install DSH and set up at least one model in it. DS Bot uses the models fr
 2. In **Package name or address**, enter `ds-bot`. In mainland China, set **Registry** to **Mainland China mirror**.
 3. Select **Install**, then **Enable now**. If DSH says the change takes effect at the next start, quit DSH completely and open it again.
 
-If npm is not reachable, in step 2 you can also enter the full path of `ds-bot-0.1.2.tgz` downloaded from [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases), or `github:Fei2411/DeepSeek-Bot#v0.1.2&path:/ds-bot` (needs Git).
+If npm is not reachable, in step 2 you can also enter the full path of `ds-bot-0.1.4.tgz` downloaded from [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases), or `github:Fei2411/DeepSeek-Bot#v0.1.4&path:/ds-bot` (needs Git).
 
 **DSH Web (Windows, macOS, Linux)**
 
@@ -66,7 +66,13 @@ In short: have a question? Ask the main bot.
 
 DS Bot has group chats. A group chat is a great way to get several bots to work together, but it clearly costs more. So DS Bot does this: every group chat has an admin. The admin answers your messages by default and calls in the other bots for you. You can also @ a bot directly, and it answers you directly: type @ and pick the bot from the list. To give the bots another chat as context, use + → Reference a chat in the message box.
 
+Any bot can hand work to another bot with @. That bot does the work on its own, and the group goes on. While it works, the group, the sidebar and the bot's own chat show what it is doing. When it is done, it posts the result in the group, and the bot that asked for the work answers. To stop the work, open the group's details.
+
 ![Group chat: the admin, Chief, hands the work to Writer and Coder](docs/images/group.png)
+
+### Capabilities
+
+Settings → **Capabilities** is a shared library of MCP servers, skills and packs. Add a capability to a Bot in its settings; it is available from that Bot's next message in its own chat and group chats. A local MCP command that a Bot adds needs your approval before it can run. While other Bots use a capability, only you or a Main Bot can change or delete it.
 
 ### Usage
 

@@ -2,7 +2,7 @@
 
 This fork is [PigeonAI-Yang/DeepSeek-Bot](https://github.com/PigeonAI-Yang/DeepSeek-Bot). It keeps the Windows Desktop changes in the plugin source at `ds-bot/src/client`.
 
-The inherited `ds-bot` package version is `0.1.2`. The local Desktop-modified package is `0.1.3`, and this fork has no release. The generated client is built from `ds-bot/src/client` with the existing `npm run build` workflow in `ds-bot/`.
+The fork uses `ds-bot` package version `0.1.4`. The generated client is built from `ds-bot/src/client` with the existing `npm run build` workflow in `ds-bot/`.
 
 ## Install this fork
 
@@ -16,7 +16,7 @@ In DSH Desktop, enter `github:PigeonAI-Yang/DeepSeek-Bot#main&path:/ds-bot` as t
 - Group headers align member avatars and names with the admin label.
 - The model menu is capped at 400px in height; a brain icon precedes the reasoning disclosure.
 - The name capsule and downward runtime details form one panel with aligned edges. Header and group member dock share the existing member-work state.
-- The Windows top menu uses DS Bot branding.
+- The Windows application menu uses DS Bot branding, and an available update appears as a cloud control in the title bar.
 - The permission badge displays the active permission preset without changing it. Each Bot has its own model and reasoning-effort selectors.
 - Composer controls use 28px buttons, symmetric 18px horizontal edge spacing and an 8px gap. The microphone stays on the left; waveform, send and stop share the right action area.
 - The unconditional compatibility badge was removed.

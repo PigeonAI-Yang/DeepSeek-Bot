@@ -17,7 +17,7 @@ DeepSeek Bot（简称 DS Bot）是一个基于 [DeepSeek Harness](https://github
 
 本仓库是 [PigeonAI-Yang/DeepSeek-Bot](https://github.com/PigeonAI-Yang/DeepSeek-Bot)，包含 Windows 桌面版调整，详见 [桌面版定制](docs/desktop-customizations.md)。要在 dsh Desktop 安装这个分支，请把 `github:PigeonAI-Yang/DeepSeek-Bot#main&path:/ds-bot` 填为插件地址。
 
-继承的 `ds-bot` 包版本仍是 `0.1.2`。本地桌面修改版本是 `0.1.3`，这个分支尚未发布 release。生成的客户端来自 `ds-bot/src/client`，继续在 `ds-bot/` 使用现有的 `npm run build` 工作流。
+本分支的 `ds-bot` 包版本为 `0.1.4`。Windows Desktop 定制包括带有 DS Bot 品牌的应用菜单，以及标题栏中的云朵更新控件。生成客户端来自 `ds-bot/src/client`，继续在 `ds-bot/` 使用现有的 `npm run build` 工作流。
 
 ![和 Chief 说一句话，它就把 bot 和群聊建好](docs/images/team.zh.png)
 
@@ -31,7 +31,7 @@ DeepSeek Bot（简称 DS Bot）是一个基于 [DeepSeek Harness](https://github
 2. **包名或地址** 填 `ds-bot`。在中国大陆，**安装源** 选 **中国大陆镜像源**。
 3. 点 **安装**，再点 **立即启用**。如果提示“下次启动生效”，完全退出 dsh 再打开。
 
-连不上 npm 时，第 2 步也可以填 [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases) 里下载的 `ds-bot-0.1.2.tgz` 的完整路径，或者 `github:Fei2411/DeepSeek-Bot#v0.1.2&path:/ds-bot`（需要装 Git）。
+连不上 npm 时，第 2 步也可以填 [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases) 里下载的 `ds-bot-0.1.4.tgz` 的完整路径，或者 `github:Fei2411/DeepSeek-Bot#v0.1.4&path:/ds-bot`（需要装 Git）。
 
 **dsh Web（Windows、macOS、Linux）**
 
@@ -66,7 +66,13 @@ npx @deepseek-ai/dsh@0.2.1-alpha.1 web
 
 ds bot 拥有群聊功能。群聊是非常好的多 bot 协作方式，但它会带来非常明显的费用问题。ds bot 为此特意做了优化：在一个群聊中，你需要设置一个管理员。你的消息默认由管理员回复，它会帮你调用其他 bot。你也可以直接 @ 你需要沟通的 bot，它会直接回应你：输入 @，从列表里选 bot 就行。想让 bot 参考另一段对话，点输入框的 + → 引用对话。
 
+任何 bot 都可以用 @ 把活派给另一个 bot。接活的 bot 自己去做，群聊照常进行。它干活时，群聊、侧边栏和它自己的聊天里都能看到它在做什么。做完后，它把结果发到群里，由派活的 bot 接着回应。要停下它的工作，打开群聊详情。
+
 ![群聊：管理员 Chief 把活派给写手和程序员](docs/images/group.zh.png)
+
+### 能力
+
+设置 → **能力** 是团队共享的 MCP 服务、技能和能力包列表。在 Bot 设置中启用能力后，从该 Bot 下一条消息开始生效，也适用于它参与的群聊。Bot 添加的本地 MCP 命令需要你先批准才能运行。有其他 Bot 在用的能力，只有你或主 Bot 能修改、删除。
 
 ### 用量
 
