@@ -4928,13 +4928,13 @@ function TeamSidebar(props) {
       { className: "bt-side-top" },
       (0, import_react8.createElement)("span", { className: "bt-brand" }, (0, import_react8.createElement)(BrandMark, { size: 22 }), (0, import_react8.createElement)(BrandName)),
       (0, import_react8.createElement)(UpdateButton, { useUpdate: props.useUpdate, actions }),
-      (0, import_react8.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("Search"), title: t("Search"), onClick: () => actions.openPalette() }, (0, import_react8.createElement)(SearchIcon)),
-      (0, import_react8.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react8.createElement)(PlusIcon))
+      (0, import_react8.createElement)("button", { type: "button", className: "bt-round bt-titlebar-moved", "aria-label": t("Search"), title: t("Search"), onClick: () => actions.openPalette() }, (0, import_react8.createElement)(SearchIcon)),
+      (0, import_react8.createElement)("button", { type: "button", className: "bt-round bt-titlebar-moved", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react8.createElement)(PlusIcon))
     ) : (0, import_react8.createElement)(
       import_react8.Fragment,
       null,
       (0, import_react8.createElement)(UpdateButton, { useUpdate: props.useUpdate, actions }),
-      (0, import_react8.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react8.createElement)(PlusIcon))
+      (0, import_react8.createElement)("button", { type: "button", className: "bt-round bt-titlebar-moved", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react8.createElement)(PlusIcon))
     ),
     wide && roster.readOnly ? (0, import_react8.createElement)("div", { className: "bt-hint bt-read-only", role: "status" }, hostText(roster.readOnly)) : null,
     (0, import_react8.createElement)(
@@ -4945,7 +4945,7 @@ function TeamSidebar(props) {
     )
   );
 }
-function UpdateButton({ useUpdate, actions }) {
+function UpdateButton({ useUpdate, actions, titlebar = false }) {
   const update = useUpdate((value) => value);
   const [open, setOpen] = (0, import_react8.useState)(false);
   const [box, setBox] = (0, import_react8.useState)(null);
@@ -4955,7 +4955,7 @@ function UpdateButton({ useUpdate, actions }) {
   (0, import_react8.useEffect)(() => {
     if (!open) return void 0;
     const onDown = (event) => {
-      if (event.target instanceof Element && (event.target.closest(".bt-update-pop") || button.current?.contains(event.target))) return;
+      if (event.composedPath?.().includes(button.current) || event.target instanceof Element && (event.target.closest(".bt-update-pop") || button.current?.contains(event.target))) return;
       setOpen(false);
     };
     const onKey = (event) => {
@@ -5001,7 +5001,7 @@ function UpdateButton({ useUpdate, actions }) {
     (0, import_react8.createElement)("button", {
       ref: button,
       type: "button",
-      className: "bt-round bt-update",
+      className: titlebar ? "bt-titlebar-action bt-update" : "bt-round bt-update bt-titlebar-update-moved",
       "data-phase": cloudPhase,
       "aria-label": label,
       title: label,
@@ -5271,36 +5271,85 @@ function BrandMark({ size = 24 }) {
 function BrandName() {
   return (0, import_react8.createElement)("span", { style: { fontWeight: 600, fontSize: 14 } }, "DS Bot");
 }
-function TitlebarBrand() {
+var titlebarIconMask = (paths) => `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${paths.map((path) => `<path d="${path}"/>`).join("")}</svg>`)}")`;
+var APPLICATION_MASK = titlebarIconMask([
+  "M4 5h12",
+  "M4 10h12",
+  "M4 15h12"
+]);
+var EDIT_MASK = titlebarIconMask([
+  "M9 4H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-3",
+  "M14.3 3.7a1.6 1.6 0 0 1 2.3 2.3L10.5 12l-3 .8.8-3z"
+]);
+function TitlebarBrand({ actions, useUpdate }) {
   const [seat, setSeat] = (0, import_react8.useState)(null);
+  const [actionsSeat, setActionsSeat] = (0, import_react8.useState)(null);
+  const updateAvailable = typeof useUpdate === "function";
   (0, import_react8.useEffect)(() => {
     if (typeof document === "undefined" || !document.documentElement.hasAttribute("data-windows-titlebar")) return void 0;
     const body = document.body;
     if (!body) return void 0;
     const startProperty = "--dsh-windows-menu-start";
-    const marker = "data-bt-titlebar-brand";
     const appliedStartValue = "16px";
-    const appliedMarkerValue = "";
     let menuHost = null;
     let previousStartValue = "";
     let previousStartPriority = "";
     let changedStart = false;
-    let previousMarkerValue = null;
-    let hadMarker = false;
-    let changedMarker = false;
     let ownedSeat = null;
+    let ownedActionsSeat = null;
     let ownedStyle = null;
-    let observer = null;
+    let attachObserver = null;
+    let localeObserver = null;
+    const markers = /* @__PURE__ */ new Map();
+    const nativeLabels = /* @__PURE__ */ new Map();
+    const attributes = ["aria-label", "title"];
+    const actionsAvailable = typeof actions?.openPalette === "function" && typeof actions?.openNewChat === "function";
+    const setBodyMarker = (marker) => {
+      const previous = { present: body.hasAttribute(marker), value: body.getAttribute(marker) };
+      const applied = "";
+      body.setAttribute(marker, applied);
+      markers.set(marker, { ...previous, applied, changed: !previous.present || previous.value !== applied });
+    };
+    const syncNativeLabels = (menubar) => {
+      for (const button of Array.from(menubar.children).filter((child) => child.tagName === "BUTTON")) {
+        const label = button.textContent.trim();
+        if (!label) continue;
+        let state = nativeLabels.get(button);
+        if (!state) {
+          state = new Map(attributes.map((attribute) => [attribute, { previous: button.getAttribute(attribute), applied: null, owned: true }]));
+          nativeLabels.set(button, state);
+        }
+        for (const attribute of attributes) {
+          const entry = state.get(attribute);
+          if (!entry.owned || entry.applied !== null && button.getAttribute(attribute) !== entry.applied) {
+            entry.owned = false;
+            continue;
+          }
+          button.setAttribute(attribute, label);
+          entry.applied = label;
+        }
+      }
+    };
     const cleanup = () => {
-      observer?.disconnect();
+      attachObserver?.disconnect();
+      localeObserver?.disconnect();
+      for (const [button, state] of nativeLabels) {
+        for (const [attribute, entry] of state) {
+          if (!entry.owned || entry.applied === null || button.getAttribute(attribute) !== entry.applied) continue;
+          if (entry.previous === null) button.removeAttribute(attribute);
+          else button.setAttribute(attribute, entry.previous);
+        }
+      }
       ownedSeat?.remove();
+      ownedActionsSeat?.remove();
       ownedStyle?.remove();
       if (changedStart && menuHost?.style.getPropertyValue(startProperty) === appliedStartValue && menuHost.style.getPropertyPriority(startProperty) === "") {
         if (previousStartValue) menuHost.style.setProperty(startProperty, previousStartValue, previousStartPriority);
         else menuHost.style.removeProperty(startProperty);
       }
-      if (changedMarker && body.getAttribute(marker) === appliedMarkerValue) {
-        if (hadMarker) body.setAttribute(marker, previousMarkerValue);
+      for (const [marker, entry] of markers) {
+        if (!entry.changed || body.getAttribute(marker) !== entry.applied) continue;
+        if (entry.present) body.setAttribute(marker, entry.value);
         else body.removeAttribute(marker);
       }
     };
@@ -5309,49 +5358,91 @@ function TitlebarBrand() {
       const root = host?.shadowRoot;
       const menubar = root?.querySelector('[role="menubar"]');
       if (!host || !root || !menubar || menubar.parentNode !== root) return false;
-      if (root.querySelector("[data-bt-titlebar-seat]") || root.querySelector("[data-bt-titlebar-brand-style]")) return true;
+      if (root.querySelector("[data-bt-titlebar-seat]") || root.querySelector("[data-bt-titlebar-actions-seat]") || root.querySelector("[data-bt-titlebar-brand-style]")) return true;
       const titlebarSeat = document.createElement("span");
       titlebarSeat.className = "bt-titlebar-seat";
       titlebarSeat.setAttribute("data-bt-titlebar-seat", "");
+      const titlebarActionsSeat = actionsAvailable ? document.createElement("span") : null;
+      if (titlebarActionsSeat) {
+        titlebarActionsSeat.className = "bt-titlebar-actions-seat";
+        titlebarActionsSeat.setAttribute("data-bt-titlebar-actions-seat", "");
+      }
       const titlebarStyle = document.createElement("style");
       titlebarStyle.setAttribute("data-bt-titlebar-brand-style", "");
       titlebarStyle.textContent = [
-        ":host{gap:14px}",
+        ":host{gap:0}",
         ".bt-titlebar-seat{display:inline-flex;align-items:center;flex:none;height:28px;min-width:0}",
+        ".bt-titlebar-seat[data-bt-titlebar-seat]{margin-right:14px}",
+        ".bt-titlebar-actions-seat{display:inline-flex;align-items:center;gap:8px;margin-left:8px}",
         ".bt-titlebar-brand{display:inline-flex;align-items:center;gap:6px;height:28px;color:var(--bt-ink,var(--dsw-alias-label-primary));font-family:inherit;font-size:14px;line-height:20px;font-weight:600;letter-spacing:-.01em;white-space:nowrap;cursor:default;-webkit-app-region:no-drag}",
         ".bt-brand-whale{display:inline-flex;color:var(--bt-accent)}",
         ".bt-mark{display:inline-block;position:relative;flex:none}",
-        ".bt-mark svg{display:block;width:100%;height:100%;overflow:visible}"
+        ".bt-mark svg{display:block;width:100%;height:100%;overflow:visible}",
+        '[role="menubar"]{display:flex;gap:8px}',
+        'button.bt-titlebar-action,[role="menubar"]>button{box-sizing:border-box;width:28px;height:28px;min-width:28px;flex:none;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:0;line-height:normal;cursor:default;-webkit-app-region:no-drag}',
+        'button.bt-titlebar-action:hover,button.bt-titlebar-action[aria-expanded="true"],[role="menubar"]>button:hover,[role="menubar"]>button[aria-expanded="true"]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
+        'button.bt-titlebar-action:focus-visible,[role="menubar"]>button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}',
+        ':host-context(html[data-input-modality="pointer"]) button.bt-titlebar-action:focus-visible,:host-context(html[data-input-modality="pointer"]) [role="menubar"]>button:focus-visible{outline-color:transparent}',
+        "button.bt-titlebar-action svg{display:block;width:16px;height:16px;flex:none}",
+        `button.bt-titlebar-action.bt-update{position:relative;color:var(--bt-accent,#4D6BFE);animation:bt-update-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}`,
+        "button.bt-titlebar-action.bt-update[data-phase=installed]{color:var(--bt-ink-2)}",
+        "button.bt-titlebar-action.bt-update[data-phase=installing] .bt-cloud-arrow{animation:bt-cloud-drop 1.1s cubic-bezier(.45,0,.55,1) infinite}",
+        "@keyframes bt-update-in{from{opacity:0;transform:scale(.6);filter:blur(4px)}}",
+        "@keyframes bt-cloud-drop{0%{transform:translateY(-3px);opacity:0}35%{opacity:1}70%{transform:translateY(1px);opacity:1}100%{transform:translateY(2px);opacity:0}}",
+        "button.bt-titlebar-action.bt-update .bt-update-dot{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:#E5484D;box-shadow:0 0 0 1.5px var(--bt-sidebar)}",
+        "@media (prefers-reduced-motion:reduce){button.bt-titlebar-action.bt-update,button.bt-titlebar-action.bt-update .bt-cloud-arrow{animation:none}}",
+        '[role="menubar"]>button::before{content:"";display:block;width:16px;height:16px;flex:none;background-color:currentColor;mask-repeat:no-repeat;mask-position:center;mask-size:contain;-webkit-mask-repeat:no-repeat;-webkit-mask-position:center;-webkit-mask-size:contain}',
+        `[role="menubar"]>button:first-child::before{mask-image:${APPLICATION_MASK};-webkit-mask-image:${APPLICATION_MASK}}`,
+        `[role="menubar"]>button:nth-child(2)::before{mask-image:${EDIT_MASK};-webkit-mask-image:${EDIT_MASK}}`
       ].join("\n");
       root.insertBefore(titlebarSeat, menubar);
+      if (titlebarActionsSeat) root.appendChild(titlebarActionsSeat);
       root.appendChild(titlebarStyle);
       menuHost = host;
       previousStartValue = host.style.getPropertyValue(startProperty);
       previousStartPriority = host.style.getPropertyPriority(startProperty);
       host.style.setProperty(startProperty, appliedStartValue);
-      changedStart = true;
-      hadMarker = body.hasAttribute(marker);
-      previousMarkerValue = body.getAttribute(marker);
-      body.setAttribute(marker, appliedMarkerValue);
-      changedMarker = true;
+      changedStart = previousStartValue !== appliedStartValue || previousStartPriority !== "";
+      setBodyMarker("data-bt-titlebar-brand");
+      if (titlebarActionsSeat) setBodyMarker("data-bt-titlebar-actions");
+      if (titlebarActionsSeat && updateAvailable) setBodyMarker("data-bt-titlebar-update");
       ownedSeat = titlebarSeat;
+      ownedActionsSeat = titlebarActionsSeat;
       ownedStyle = titlebarStyle;
+      syncNativeLabels(menubar);
+      localeObserver = new MutationObserver(() => syncNativeLabels(menubar));
+      localeObserver.observe(menubar, { childList: true, characterData: true, subtree: true });
       setSeat(titlebarSeat);
+      setActionsSeat(titlebarActionsSeat);
       return true;
     };
     if (!attach()) {
-      observer = new MutationObserver(() => {
-        if (attach()) observer.disconnect();
+      attachObserver = new MutationObserver(() => {
+        if (attach()) attachObserver.disconnect();
       });
-      observer.observe(body, { childList: true, subtree: true });
+      attachObserver.observe(body, { childList: true, subtree: true });
     }
     return cleanup;
-  }, []);
-  if (!seat) return null;
-  return (0, import_react_dom2.createPortal)((0, import_react8.createElement)("span", { className: "bt-titlebar-brand" }, (0, import_react8.createElement)(BrandMark, { size: 22 }), (0, import_react8.createElement)(BrandName)), seat);
+  }, [actions, updateAvailable]);
+  return (0, import_react8.createElement)(
+    import_react8.Fragment,
+    null,
+    seat ? (0, import_react_dom2.createPortal)((0, import_react8.createElement)("span", { className: "bt-titlebar-brand" }, (0, import_react8.createElement)(BrandMark, { size: 22 }), (0, import_react8.createElement)(BrandName)), seat) : null,
+    actionsSeat ? (0, import_react_dom2.createPortal)((0, import_react8.createElement)(
+      import_react8.Fragment,
+      null,
+      (0, import_react8.createElement)("button", { type: "button", className: "bt-titlebar-action", "aria-label": t("Search"), title: t("Search"), onClick: () => actions.openPalette() }, (0, import_react8.createElement)(SearchIcon)),
+      (0, import_react8.createElement)("button", { type: "button", className: "bt-titlebar-action", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react8.createElement)(PlusIcon)),
+      updateAvailable ? (0, import_react8.createElement)(UpdateButton, { useUpdate, actions, titlebar: true }) : null
+    ), actionsSeat) : null
+  );
 }
 var SIDEBAR_CSS = `
 body[data-bt-titlebar-brand] .bt-side-top>.bt-brand{display:none}
+body[data-bt-titlebar-actions] .bt-titlebar-moved{display:none}
+body[data-bt-titlebar-update] .bt-titlebar-update-moved{display:none}
+body[data-bt-titlebar-update] .bt-side-top{display:none}
+body[data-bt-titlebar-actions] .bt-side-top:not(:has(.bt-update)){display:none}
 .bt-side-top .bt-brand{cursor:default;padding-left:6px}
 .bt-side-top .bt-brand:hover{background:none}
 .bt-brand .bt-mark{flex:none}
@@ -13541,7 +13632,7 @@ function apply(ctx) {
     installCompiledStyles(USER_MESSAGE_CSS, "user-messages"),
     browsers ? installCompiledStyles(BROWSER_CSS, "browser") : null,
     installTheme(),
-    shadow("shell.overlay", { id: "bot-titlebar-brand", order: 0 }, TitlebarBrand),
+    shadow("shell.overlay", { id: "bot-titlebar-brand", order: 0, inject: face }, TitlebarBrand),
     shadow("sidebar.workspaces", { priority: -10, inject: face }, TeamSidebar),
     shadow("sidebar.brand.mark", { priority: -10 }, BrandMark),
     shadow("sidebar.brand.name", { priority: -10 }, BrandName),

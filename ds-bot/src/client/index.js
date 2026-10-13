@@ -759,7 +759,7 @@ export function apply(ctx) {
     installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
     browsers ? installCompiledStyles(BROWSER_CSS, 'browser') : null,
     installTheme(),
-    shadow('shell.overlay', { id: 'bot-titlebar-brand', order: 0 }, TitlebarBrand),
+    shadow('shell.overlay', { id: 'bot-titlebar-brand', order: 0, inject: face }, TitlebarBrand),
     shadow('sidebar.workspaces', { priority: -10, inject: face }, TeamSidebar),
     shadow('sidebar.brand.mark', { priority: -10 }, BrandMark),
     shadow('sidebar.brand.name', { priority: -10 }, BrandName),
