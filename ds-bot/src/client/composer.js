@@ -3,6 +3,9 @@ import { createPortal } from 'react-dom'
 import { ChatsIcon, ClockIcon, MicIcon, PaperclipIcon, PeopleIcon, PlusIcon, WaveIcon } from './icons.js'
 import { BotMark } from './mark.js'
 import { useLinger } from './motion.js'
+import { currentPart } from './text.js'
+import { PERMISSION_LABELS } from './details-drawer.js'
+import { ModelMenu } from './model-menu.js'
 import { t } from './i18n.js'
 
 // -------------------------------------------------------------------------
@@ -154,4 +157,32 @@ export function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
     h('button', { type: 'button', role: 'menuitem', onClick: attach }, h(PaperclipIcon), h('span', { className: 'bt-menu-label' }, t('Add files'))),
     canReference ? h('button', { type: 'button', role: 'menuitem', onMouseDown: keepComposerFocus, onClick: reference }, h(ChatsIcon), h('span', { className: 'bt-menu-label' }, t('Reference a chat'))) : null,
     h('button', { type: 'button', role: 'menuitem', onClick: schedule }, h(ClockIcon), h('span', { className: 'bt-menu-label' }, t('Scheduled task')))), document.body) : null)
+}
+
+export function ComposerPermission({ sessionId, useRoster }) {
+  const roster = useRoster(value => value)
+  const bot = roster.byId?.[sessionId]
+  if (!bot || !roster.ready || currentPart(bot) !== sessionId) return null
+  const saved = bot.permission ?? roster.permissions?.defaultPreset
+  if (saved == null) return null
+  const option = roster.permissions?.options?.find(item => item.value === saved)
+  const label = PERMISSION_LABELS[saved] ? t(PERMISSION_LABELS[saved]) : option?.name ?? saved
+  return h('span', { className: 'bt-composer-permission', title: label }, label)
+}
+
+export function ComposerModel({ sessionId, useRoster, actions }) {
+  const roster = useRoster(value => value)
+  const bot = roster.byId?.[sessionId]
+  if (!bot || !roster.ready || currentPart(bot) !== sessionId) return null
+  const run = async operation => {
+    try {
+      await operation
+      return true
+    } catch (failure) {
+      actions.reportError(failure, 'composer-model')
+      return false
+    }
+  }
+  return h('div', { className: 'bt-composer-model' },
+    h(ModelMenu, { key: `${bot.id}:${sessionId}`, bot, roster, actions, wide: false, run }))
 }

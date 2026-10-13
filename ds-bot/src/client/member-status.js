@@ -9,7 +9,7 @@ import { t } from './i18n.js'
 // busy, in any of their chats, and the same per member in the details panel, where
 // the approvals their group turns wait on are answered.
 
-const NO_WORK = { bots: {}, approvals: [] }
+export const NO_WORK = { bots: {}, approvals: [] }
 
 export function memberWork(room, work = NO_WORK) {
   return room.members.map((id) => {

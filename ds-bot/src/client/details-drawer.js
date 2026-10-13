@@ -34,7 +34,7 @@ const EMPTY_TABS = { ids: [], active: null }
 
 // The Bot's browser inside the details page: its tabs as small window cards on
 // Desktop, a pointer there on web.
-const PERMISSION_LABELS = { 'read-only': 'Read only', 'workspace-write': 'Workspace', 'danger-full-access': 'Full access' }
+export const PERMISSION_LABELS = { 'read-only': 'Read only', 'workspace-write': 'Workspace', 'danger-full-access': 'Full access' }
 const DANGER = new Set(['danger-full-access'])
 
 // The Bot's permission preset, from the presets DeepSeek Harness offers.

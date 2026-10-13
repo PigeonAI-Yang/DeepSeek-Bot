@@ -142,8 +142,8 @@ export function ModelMenu({ bot, roster, actions, run, wide = false, onPick, onP
     const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8))
     const below = window.innerHeight - rect.bottom
     setPlace(below >= 260 || below >= rect.top
-      ? { left, width, top: rect.bottom + 4, maxHeight: below - 16, '--bt-origin': 'top right' }
-      : { left, width, bottom: window.innerHeight - rect.top + 4, maxHeight: rect.top - 16, '--bt-origin': 'bottom right' })
+      ? { left, width, top: rect.bottom + 4, maxHeight: Math.max(0, Math.min(400, below - 16)), '--bt-origin': 'top right' }
+      : { left, width, bottom: window.innerHeight - rect.top + 4, maxHeight: Math.max(0, Math.min(400, rect.top - 16)), '--bt-origin': 'bottom right' })
   }
   const pick = (ref) => {
     close()

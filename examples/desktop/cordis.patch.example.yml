@@ -1,0 +1,39 @@
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      amr-openai:
+        displayName: AMR
+        api: openai-completions
+        baseURL: https://amr-link.open-design.ai/v1
+        apiKeyEnv: AMR_API_KEY
+        models:
+          - id: deepseek-v4.1-flash
+            name: deepseek-v4.1-flash
+            contextWindow: 1000000
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              'off': null
+              low: low
+              high: high
+              max: max
+            compat:
+              thinkingFormat: deepseek
+              supportsReasoningEffort: true
+              supportsDeveloperRole: false
+              requiresReasoningContentOnAssistantMessages: true
+        retryPolicy:
+          mode: normal
+          maxRetries: 5
+          retryableCodes:
+            - EMPTY_RESPONSE
+            - SERVER
+            - TIMEOUT
+            - TRANSPORT
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: amr-openai
+    model: deepseek-v4.1-flash

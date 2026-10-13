@@ -1,11 +1,13 @@
-import { createElement as h, Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { currentPart, latestMemoryChange } from './text.js'
 import { ArrowUpIcon, CloseIcon, ArrowDownIcon, MemoryIcon } from './icons.js'
 import { botState, BotAvatar, RoomAvatar } from './mark.js'
 import { ActivityIndicator } from './activity-row.js'
-import { clockLabel, openingTurn, unseenSince } from './cells.js'
-import { t } from './i18n.js'
+import { clockLabel, openingTurn, unseenSince, Shimmer, workPhrase } from './cells.js'
+import { modelOf } from './model-menu.js'
+import { NO_WORK, busyMembers, summaryText } from './member-status.js'
+import { dateLocale, t } from './i18n.js'
 
 // -------------------------------------------------------------------------
 // Conversation header
@@ -42,18 +44,62 @@ function MemoryNotice({ shown }) {
     h('span', { className: 'bt-pill-mem-in', ref: inner }, h('span', { className: 'bt-pill-mem-ico' }, h(MemoryIcon)), label))
 }
 
-export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, actions }) {
+function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, panelId, style, busy = [], memberStatus = '' }) {
+  const liveKey = useLive(state => JSON.stringify(state[sessionId] ?? {}))
+  const entries = useMemo(() => Object.entries(JSON.parse(liveKey)), [liveKey])
+  const tools = entries.filter(([, entry]) => !entry?.text)
+  const memberActivities = busy.map(member => ({
+    id: member.id,
+    entry: {
+      label: `${member.bot.name} · ${member.state === 'ask' ? t('Waiting for your approval') : workPhrase(member.doing?.tool)}`,
+      at: member.state === 'ask' ? member.approvals[0]?.at : member.doing?.since,
+    },
+  }))
+  const hasQuestion = roster.questions?.[bot ? currentPart(bot) : sessionId] !== undefined
+  const status = memberStatus || (!running
+    ? hasQuestion ? t('Waiting for your answer') : t('Idle')
+    : entries.some(([, entry]) => entry?.text) ? t('Generating a response')
+      : entries.some(([, entry]) => entry?.relay) ? t('Coordinating with Bots')
+        : tools.length > 0 ? t('Using tools') : t('Thinking about it'))
+  const model = bot ? modelOf(bot, roster) : undefined
+  const activities = busy.length > 0 ? memberActivities.slice(0, 4)
+    : running ? tools.map(([id, entry]) => ({ id, entry }))
+      .sort((a, b) => (Number.isFinite(b.entry?.at) ? b.entry.at : 0) - (Number.isFinite(a.entry?.at) ? a.entry.at : 0)).slice(0, 4)
+      : []
+  return h('div', { id: panelId, className: 'bt-runtime-popover', role: 'region', 'aria-label': t('Runtime details'), tabIndex: 0, style },
+    h('div', { className: 'bt-runtime-card' },
+      h('div', { className: 'bt-runtime-title' }, t('Runtime details')),
+      h('div', { className: 'bt-runtime-row' },
+        h('div', { className: 'bt-runtime-label' }, t('Current status')),
+        h('div', { className: 'bt-runtime-value' }, status)),
+      model ? h('div', { className: 'bt-runtime-row' },
+        h('div', { className: 'bt-runtime-label' }, t('Current model')),
+        h('div', { className: 'bt-runtime-value' }, `${model.name} · ${model.provider}`)) : null,
+      h('div', { className: 'bt-runtime-row' },
+        h('div', { className: 'bt-runtime-label' }, t('Active tools / coordination')),
+        h('div', { className: 'bt-runtime-value' }, String(busy.length > 0 ? busy.filter(member => member.state === 'work' && member.doing?.tool).length : running ? tools.length : 0))),
+      activities.length > 0 ? h('ul', { className: 'bt-runtime-activity-list' }, activities.map(({ id, entry }) => {
+        const label = typeof entry?.label === 'string' && entry.label ? entry.label : entry?.relay ? t('Coordinating with Bots') : t('Using tools')
+        const started = Number.isFinite(entry?.at) && entry.at > 0
+          ? new Date(entry.at).toLocaleTimeString(dateLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
+          : ''
+        return h('li', { key: id, className: 'bt-runtime-activity-item' },
+          h('span', { className: 'bt-runtime-activity-label' }, label),
+          started ? h('span', { className: 'bt-runtime-activity-started' }, `${t('Activity started')} · ${started}`) : null)
+      })) : null))
+}
+
+export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, actions }) {
   const roster = useRoster(value => value)
+  const work = useWork?.(value => value) ?? NO_WORK
   const title = useSessions(list => list.byId[sessionId]?.displayTitle ?? list.byId[sessionId]?.title ?? '')
-  const firstTurns = useSessions((list) => {
+  const firstTurns = useSessions(list => {
     const outline = list.projectionsBySession?.[sessionId]?.values?.turnOutline ?? list.byId[sessionId]?.projectionValues?.turnOutline
     return Array.isArray(outline) ? outline.slice(0, 8).map(entry => entry.turn).join(',') : ''
   })
   const hiddenTurns = roster.exchangeTurns?.[sessionId]
   const visit = useUi(state => state.visits?.[sessionId])
-  // The opening separator has no turn before it, so the transcript column draws it,
-  // unless the opening is unread: then the first trigger draws it under the divider.
-  const opening = useTurnClock((state) => {
+  const opening = useTurnClock(state => {
     const first = openingTurn(state[sessionId], firstTurns, hiddenTurns)
     return first && !unseenSince(visit, first.start) ? clockLabel(first.start) : ''
   })
@@ -67,14 +113,15 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
   const doing = useActivity(map => map[owner])
   const bot = roster.byId[sessionId]
   const room = roster.roomsById[sessionId]
+  const busy = room ? busyMembers(room, work, roster) : []
+  const memberSummary = busy.length ? summaryText(busy) : null
+  const memberStatus = memberSummary ? [memberSummary.waiting, memberSummary.doing].filter(Boolean).join(' · ') : ''
   const detailsOpen = useUi(state => state.details === sessionId)
   const name = bot?.name ?? room?.name ?? ''
   const useNews = useMemoryNews ?? noNews
   const memoryIds = bot ? [bot.id] : room?.members ?? []
   const notice = useMemoryNotice(memoryIds, useNews)
-  // While the notice shows, the pill opens the memory of the Bot that changed.
   const changed = useNews(map => latestMemoryChange(map, memoryIds))
-  // The composer placeholder is not localizable per Session, so CSS reads it from here.
   useEffect(() => {
     document.body.style.setProperty('--bt-placeholder', JSON.stringify(name ? t('Message {name}', { name }) : t('Message')))
   }, [name, t('Message')])
@@ -82,27 +129,56 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     actions.beginVisit(sessionId)
     return () => actions.endVisit(sessionId)
   }, [sessionId])
-  // Group chats have no voice mode, so the composer CSS needs to know the Session kind.
   useEffect(() => {
     if (room) document.body.dataset.btRoom = ''
     else delete document.body.dataset.btRoom
     return () => { delete document.body.dataset.btRoom }
   }, [Boolean(room)])
   const memoryNotice = notice && changed !== null && roster.memory !== false
+  const hoverWrap = useRef(null)
+  const panelId = useId()
+  const [openForSession, setOpenForSession] = useState(null)
+  const [panelStyle, setPanelStyle] = useState(null)
+  const open = openForSession === sessionId
+  useEffect(() => { setOpenForSession(null) }, [sessionId])
+  useLayoutEffect(() => {
+    if (!open) { setPanelStyle(null); return undefined }
+    const measure = () => {
+      const wrapper = hoverWrap.current
+      if (!wrapper) return
+      const rect = wrapper.getBoundingClientRect()
+      const maxHeight = Math.max(0, Math.min(400, window.innerHeight - rect.bottom - 12))
+      setPanelStyle({ '--bt-runtime-max-height': `${maxHeight}px` })
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [open])
   return h('div', { className: 'bt-head' },
+    h('div', {
+      className: 'bt-pill-hover', 'data-runtime-open': open ? '' : undefined, ref: hoverWrap,
+      onPointerEnter: () => setOpenForSession(sessionId),
+      onPointerLeave: () => setOpenForSession(current => current === sessionId ? null : current),
+      onFocusCapture: () => setOpenForSession(sessionId),
+      onBlurCapture: event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpenForSession(current => current === sessionId ? null : current) },
+      onKeyDown: event => { if (open && event.key === 'Escape') { event.stopPropagation(); setOpenForSession(null) } },
+    },
     h('button', {
       type: 'button', className: 'bt-pill', 'aria-expanded': detailsOpen, 'data-memory': memoryNotice ? 'updated' : undefined,
-      'aria-label': memoryNotice ? t('Memory updated. Open {name}\'s memory', { name: roster.byId[changed]?.name ?? name }) : t('View conversation details'),
+      'aria-describedby': open ? panelId : undefined,
+      'aria-label': memoryNotice ? t("Memory updated. Open {name}'s memory", { name: roster.byId[changed]?.name ?? name }) : t('View conversation details'),
       onClick: () => (memoryNotice ? actions.openMemory(changed) : actions.toggleDetails(sessionId)),
     },
     bot ? h(BotAvatar, { bot, size: 24, state: botState(running, doing, roster.questions?.[currentPart(bot)] !== undefined), badge: false })
       : room ? h(RoomAvatar, { room, roster, size: 24 }) : null,
     h('span', { className: 'bt-pill-name' }, bot?.name ?? room?.name ?? (title || t('New chat'))),
+    memberStatus ? h('span', { className: 'bt-pill-status', role: 'status', 'aria-live': 'polite' }, h('span', { className: 'bt-pill-status-label' }, h(Shimmer, null, memberStatus)))
+      : h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, actions }),
     h(MemoryNotice, { shown: memoryNotice }),
     h('span', { className: 'bt-pill-go', 'aria-hidden': true }, h(GoArrow))),
+    open && panelStyle ? h(RuntimeStatusPanel, { sessionId, bot, roster, running, useLive, panelId, style: panelStyle, busy, memberStatus }) : null),
     h('span', { className: 'bt-sr', role: 'status' }, memoryNotice ? t('Memory updated') : ''),
-    h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
-    h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, actions }))
+    h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }))
 }
 
 // New-message pills. "N new messages ↓" takes Back to bottom's place when

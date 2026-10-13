@@ -51,8 +51,10 @@ export function ExchangeDialog({ pair, roster, actions }) {
               return h(Fragment, { key: entry.id },
                 showDay ? h('time', { className: 'bt-time' }, dayLabel(entry.time)) : null,
                 h('div', { className: 'bt-group-msg' },
-                  h('span', { className: 'bt-group-name', style: { color: inkText(colorOf(bot)) } }, bot.name),
-                  h(Bubbles, { texts: [entry.text], roster, selfId: bot.id, actions, lead: h('span', { className: 'bt-lead' }, h(BotMark, { bot: bot, size: 22 })) })))
+                  h('div', { className: 'bt-group-head' },
+                    h('span', { className: 'bt-lead' }, h(BotMark, { bot, size: 22 })),
+                    h('span', { className: 'bt-group-name', style: { color: inkText(colorOf(bot)) } }, bot.name)),
+                  h(Bubbles, { texts: [entry.text], roster, selfId: bot.id, actions })))
             })),
       h('div', { className: 'bt-dialog-foot' }, h('button', { type: 'button', className: 'bt-soft', onClick: close }, t('Close Chat')))))
 }

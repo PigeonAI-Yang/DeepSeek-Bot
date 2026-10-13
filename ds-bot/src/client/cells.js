@@ -38,7 +38,8 @@ export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, 
           lead && last ? lead : null,
           h('div', { className: 'bt-bubble' },
             h(MarkdownText, { text: linkMentions(text, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact' })),
-          live ? null : h(MessageTools, { text, name: roster.byId[selfId]?.name ?? t('Bot'), sessionId, react: key ? emoji => actions.toggleReaction(msgKey, index, emoji) : undefined, actions })),
+        ),
+        live ? null : h(MessageTools, { text, name: roster.byId[selfId]?.name ?? t('Bot'), sessionId, react: key ? emoji => actions.toggleReaction(msgKey, index, emoji) : undefined, actions }),
         picked.length ? h('div', { className: 'bt-reacts' }, picked.map(emoji => h('button', {
           key: emoji, type: 'button', className: 'bt-react', 'aria-label': t('Remove reaction {emoji}', { emoji }), onClick: () => actions.toggleReaction(msgKey, index, emoji),
         }, emoji))) : null)
@@ -101,9 +102,20 @@ function MessageTools({ text, name, sessionId, react, actions }) {
 }
 
 function ThinkingRow({ text }) {
-  return h('details', { className: 'bt-think' },
-    h('summary', null, t('Thought it through')),
-    h('div', { className: 'bt-think-text' }, text))
+  return h(Fragment, null, null,
+    h('details', { className: 'bt-think' },
+      h('summary', { className: 'bt-thinking-header', 'aria-label': t('Thought it through') },
+        h('svg', {
+          className: 'bt-thinking-icon', width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none',
+          stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round',
+          'aria-hidden': true, focusable: false,
+        },
+        h('path', { d: 'M12 18V5a3 3 0 0 0-5.8-1A4 4 0 0 0 3 8a4 4 0 0 0-.5 6.7A4 4 0 0 0 7 20a3 3 0 0 0 5-2Z' }),
+        h('path', { d: 'M12 5a3 3 0 0 1 5.8-1A4 4 0 0 1 21 8a4 4 0 0 1 .5 6.7A4 4 0 0 1 17 20a3 3 0 0 1-5-2' }),
+        h('path', { d: 'M7 4c0 2 1 3 3 3M5 10c2 0 3 1 3 3M7 20v-3M17 4c0 2-1 3-3 3M19 10c-2 0-3 1-3 3M17 20v-3' })),
+        h('span', { className: 'bt-thinking-label' }, t('Thought it through')),
+        h('span', { className: 'bt-thinking-chevron', 'aria-hidden': true }, '›')),
+      h('div', { className: 'bt-think-text' }, text)))
 }
 
 export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
@@ -161,9 +173,11 @@ function GroupMessage({ bot, text, room, roster, actions, msgKey, useUi }) {
   const lead = h('button', { type: 'button', className: 'bt-lead', 'aria-label': t("Open {name}'s chat", { name: bot.name }), onClick: () => actions.openSession(bot.id) },
     h(BotMark, { bot, size: 22 }))
   return h('div', { className: 'bt-group-msg' },
-    h('span', { className: 'bt-group-name', style: { color: inkText(colorOf(bot)) } }, bot.name,
-      room?.admin === bot.id ? h('span', { className: 'bt-group-role' }, t('Admin')) : null),
-    h(Bubbles, { texts: [text], roster, selfId: bot.id, actions, sessionId: room?.id, msgKey, useUi, lead }))
+    h('div', { className: 'bt-group-head' },
+      lead,
+      h('span', { className: 'bt-group-name', style: { color: inkText(colorOf(bot)) } }, bot.name,
+        room?.admin === bot.id ? h('span', { className: 'bt-group-role' }, t('Admin')) : null)),
+    h(Bubbles, { texts: [text], roster, selfId: bot.id, actions, sessionId: room?.id, msgKey, useUi }))
 }
 
 // A centered event line that names a group chat and opens it.

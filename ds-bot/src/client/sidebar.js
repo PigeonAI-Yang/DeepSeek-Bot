@@ -1,4 +1,4 @@
-import { createElement as h, Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { FishLogo } from '@deepseek-ai/dsh-client-ui-primitives'
 import { isMainOf } from './sources.js'
@@ -347,36 +347,11 @@ function UpdateButton({ useUpdate, actions }) {
                 }, dshPhase === 'installing' ? t('Updating…') : dshPhase === 'failed' ? t('Try again') : t('Update')))) : null), document.body) : null)
 }
 
-// The footer entry to the shell's plugin panel, marked as not yet adapted: the red
-// badge and a hover tip explain that plugin support lands step by step.
 export function ConnectPlugins({ wide, actions }) {
-  const tipId = useId()
-  const [tip, setTip] = useState(false)
-  const timer = useRef(0)
-  const button = useRef(null)
-  const [box, setBox] = useState(null)
-  useEffect(() => () => clearTimeout(timer.current), [])
   if (!wide) return null
-  const show = () => {
-    clearTimeout(timer.current)
-    timer.current = setTimeout(() => {
-      const rect = button.current?.getBoundingClientRect()
-      if (!rect) return
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 268))
-      setBox({ left, bottom: window.innerHeight - rect.top + 10 })
-      setTip(true)
-    }, 250)
-  }
-  const hide = () => { clearTimeout(timer.current); setTip(false) }
   return h('span', { className: 'bt-connect-wrap' },
-    h('button', {
-      ref: button, type: 'button', className: 'bt-connect bt-connect-foot', 'aria-describedby': tip ? tipId : undefined,
-      onMouseEnter: show, onMouseLeave: hide, onFocus: show, onBlur: hide,
-      onClick: () => actions.selectPanel('plugins'),
-    },
-    h(PlugIcon), t('Connect plugins'), h('span', { className: 'bt-connect-warn', 'aria-hidden': true }, '!')),
-    tip && box ? createPortal(h('span', { role: 'tooltip', id: tipId, className: 'bt-connect-tip', style: box },
-      t('Plugin compatibility is not fully verified.')), document.body) : null)
+    h('button', { type: 'button', className: 'bt-connect bt-connect-foot', onClick: () => actions.selectPanel('plugins') },
+      h(PlugIcon), t('Connect plugins')))
 }
 
 // Account seat of the Settings trigger: the visible label stays for assistive tech only.
@@ -571,10 +546,91 @@ export function BrandName() {
   return h('span', { style: { fontWeight: 600, fontSize: 14 } }, 'DS Bot')
 }
 
+export function TitlebarBrand() {
+  const [seat, setSeat] = useState(null)
+  useEffect(() => {
+    if (typeof document === 'undefined' || !document.documentElement.hasAttribute('data-windows-titlebar')) return undefined
+    const body = document.body
+    if (!body) return undefined
+    const startProperty = '--dsh-windows-menu-start'
+    const marker = 'data-bt-titlebar-brand'
+    const appliedStartValue = '16px'
+    const appliedMarkerValue = ''
+    let menuHost = null
+    let previousStartValue = ''
+    let previousStartPriority = ''
+    let changedStart = false
+    let previousMarkerValue = null
+    let hadMarker = false
+    let changedMarker = false
+    let ownedSeat = null
+    let ownedStyle = null
+    let observer = null
+    const cleanup = () => {
+      observer?.disconnect()
+      ownedSeat?.remove()
+      ownedStyle?.remove()
+      if (changedStart && menuHost?.style.getPropertyValue(startProperty) === appliedStartValue && menuHost.style.getPropertyPriority(startProperty) === '') {
+        if (previousStartValue) menuHost.style.setProperty(startProperty, previousStartValue, previousStartPriority)
+        else menuHost.style.removeProperty(startProperty)
+      }
+      if (changedMarker && body.getAttribute(marker) === appliedMarkerValue) {
+        if (hadMarker) body.setAttribute(marker, previousMarkerValue)
+        else body.removeAttribute(marker)
+      }
+    }
+    const attach = () => {
+      const host = document.querySelector('[data-windows-menu]')
+      const root = host?.shadowRoot
+      const menubar = root?.querySelector('[role="menubar"]')
+      if (!host || !root || !menubar || menubar.parentNode !== root) return false
+      if (root.querySelector('[data-bt-titlebar-seat]') || root.querySelector('[data-bt-titlebar-brand-style]')) return true
+      const titlebarSeat = document.createElement('span')
+      titlebarSeat.className = 'bt-titlebar-seat'
+      titlebarSeat.setAttribute('data-bt-titlebar-seat', '')
+      const titlebarStyle = document.createElement('style')
+      titlebarStyle.setAttribute('data-bt-titlebar-brand-style', '')
+      titlebarStyle.textContent = [
+        ':host{gap:14px}',
+        '.bt-titlebar-seat{display:inline-flex;align-items:center;flex:none;height:28px;min-width:0}',
+        '.bt-titlebar-brand{display:inline-flex;align-items:center;gap:6px;height:28px;color:var(--bt-ink,var(--dsw-alias-label-primary));font-family:inherit;font-size:14px;line-height:20px;font-weight:600;letter-spacing:-.01em;white-space:nowrap;cursor:default;-webkit-app-region:no-drag}',
+        '.bt-brand-whale{display:inline-flex;color:var(--bt-accent)}',
+        '.bt-mark{display:inline-block;position:relative;flex:none}',
+        '.bt-mark svg{display:block;width:100%;height:100%;overflow:visible}',
+      ].join('\n')
+      root.insertBefore(titlebarSeat, menubar)
+      root.appendChild(titlebarStyle)
+      menuHost = host
+      previousStartValue = host.style.getPropertyValue(startProperty)
+      previousStartPriority = host.style.getPropertyPriority(startProperty)
+      host.style.setProperty(startProperty, appliedStartValue)
+      changedStart = true
+      hadMarker = body.hasAttribute(marker)
+      previousMarkerValue = body.getAttribute(marker)
+      body.setAttribute(marker, appliedMarkerValue)
+      changedMarker = true
+      ownedSeat = titlebarSeat
+      ownedStyle = titlebarStyle
+      setSeat(titlebarSeat)
+      return true
+    }
+    if (!attach()) {
+      observer = new MutationObserver(() => {
+        if (attach()) observer.disconnect()
+      })
+      observer.observe(body, { childList: true, subtree: true })
+    }
+    return cleanup
+  }, [])
+  if (!seat) return null
+  return createPortal(h('span', { className: 'bt-titlebar-brand' }, h(BrandMark, { size: 22 }), h(BrandName)), seat)
+}
+
 // With the whale holding the settings seat, the footer row is just the account menu
 // and Connect plugins; FooterAccount only shows when the seat went to no one. The
 // shell's footer classes are CSS-module names, so they match on their stems.
 export const SIDEBAR_CSS = `
+body[data-bt-titlebar-brand] .bt-side-top>.bt-brand{display:none}
 .bt-side-top .bt-brand{cursor:default;padding-left:6px}
 .bt-side-top .bt-brand:hover{background:none}
 .bt-brand .bt-mark{flex:none}

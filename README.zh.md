@@ -13,6 +13,12 @@
 
 DeepSeek Bot（简称 DS Bot）是一个基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（简称 dsh）的 bot 插件，插件将 dsh 改造为 bot 形式。你可以与自己创建的 bot 交流、工作。
 
+## PigeonAI 分支
+
+本仓库是 [PigeonAI-Yang/DeepSeek-Bot](https://github.com/PigeonAI-Yang/DeepSeek-Bot)，包含 Windows 桌面版调整，详见 [桌面版定制](docs/desktop-customizations.md)。要在 dsh Desktop 安装这个分支，请把 `github:PigeonAI-Yang/DeepSeek-Bot#main&path:/ds-bot` 填为插件地址。
+
+继承的 `ds-bot` 包版本仍是 `0.1.2`。本地桌面修改版本是 `0.1.3`，这个分支尚未发布 release。生成的客户端来自 `ds-bot/src/client`，继续在 `ds-bot/` 使用现有的 `npm run build` 工作流。
+
 ![和 Chief 说一句话，它就把 bot 和群聊建好](docs/images/team.zh.png)
 
 ## 安装

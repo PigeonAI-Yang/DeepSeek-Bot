@@ -13,6 +13,12 @@ English | [中文](README.zh.md)
 
 DeepSeek Bot (DS Bot) is a bot plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). It turns DSH into bots. You create your own bots, then talk and work with them.
 
+## PigeonAI fork
+
+This repository is [PigeonAI-Yang/DeepSeek-Bot](https://github.com/PigeonAI-Yang/DeepSeek-Bot). It includes the Windows Desktop changes described in [Desktop customizations](docs/desktop-customizations.md). To install this fork in DSH Desktop, enter `github:PigeonAI-Yang/DeepSeek-Bot#main&path:/ds-bot` as the plugin address.
+
+The inherited `ds-bot` package version is `0.1.2`. The local Desktop-modified package is `0.1.3`, and this fork has no release. The generated client comes from `ds-bot/src/client`; keep using the existing `npm run build` workflow in `ds-bot/`.
+
 ![Say one sentence to Chief, and it sets up the bots and the group chat](docs/images/team.png)
 
 ## Install
