@@ -4,6 +4,7 @@ import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
 import { createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
 import { themeCss, shellTokens, conversationTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
 import { MENTION_ORIGIN, currentPart } from './text.js'
+import { outputItems } from './output-items.js'
 import { SHELL_CSS, CONVERSATION_CSS, installStyles, installCompiledStyles } from './styles.js'
 import { lookOf } from './mark.js'
 import { TeamSidebar, ConnectPlugins, YouAvatar, AccountLauncher, FooterAccount, BrandMark, BrandName, TitlebarBrand, BotReturn, SIDEBAR_CSS, RETURN_CSS, holdShellShortcuts } from './sidebar.js'
@@ -33,6 +34,7 @@ import { ABOUT_CSS } from './about.js'
 import { MEMBER_CSS, MemberDock } from './member-status.js'
 import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
 import { noticeApprovals } from './approval-notices.js'
+import { toolRuns, activeToolRecords, activeReplyPeer } from './tool-records.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout', 'configForms']
 
@@ -701,6 +703,61 @@ export function apply(ctx) {
   const browserPages = browsers?.pages ?? createSource({})
   const browserTabs = browsers?.tabs ?? createSource({})
   const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, browserPages, browserTabs, surface, update } })
+  const outputsByChat = new WeakMap()
+  const outputSourceFor = sessionId => {
+    const binding = ctx.sessions.binding(sessionId)
+    if (binding === undefined) throw new Error(`ds-bot: unknown session "${sessionId}"`)
+    const chat = ctx.uiConversation.binding(binding).target('chat')
+    if (chat === undefined || chat === null) throw new Error('ds-bot: Chat target is unavailable')
+    let source = outputsByChat.get(chat)
+    if (!source) {
+      let snapshot = Symbol('unread')
+      let cwd = ctx.sessions.list.getSnapshot().byId?.[sessionId]?.cwd
+      let value = []
+      source = {
+        getSnapshot() {
+          const next = chat.getSnapshot()
+          const nextCwd = ctx.sessions.list.getSnapshot().byId?.[sessionId]?.cwd
+          if (next !== snapshot || nextCwd !== cwd) {
+            snapshot = next
+            cwd = nextCwd
+            value = outputItems(next, { cwd })
+          }
+          return value
+        },
+        subscribe: listener => {
+          const offChat = chat.subscribe(listener)
+          const offSessions = ctx.sessions.list.subscribe(listener)
+          return () => { offChat(); offSessions() }
+        },
+      }
+      outputsByChat.set(chat, source)
+    }
+    return source
+  }
+  const outputsFace = sessionId => {
+    const base = face()
+    const sidebarRight = ctx.get('sidebarRight')
+    const loadOutputImage = async attachment => {
+      const cached = await ctx.uiConversation.peekImageUrl?.(sessionId, attachment)
+      if (typeof cached === 'string' && cached !== '') return cached
+      return ctx.uiConversation.imageUrl(sessionId, attachment)
+    }
+    const openOutputFile = path => {
+      if (typeof path !== 'string' || typeof sidebarRight?.openResource !== 'function') return
+      const segments = path.replace(/\\/g, '/').split('/').map(segment => encodeURIComponent(segment))
+      return sidebarRight.openResource(`dsh-resource://file/session/${encodeURIComponent(sessionId)}/${segments.join('/')}`)
+    }
+    const loadEarlierOutputs = () => {
+      const binding = ctx.sessions.binding(sessionId)
+      return binding?.session?.loadOlder()
+    }
+    return {
+      ...base,
+      hooks: { ...base.hooks, outputs: outputSourceFor(sessionId), toolState: toolSourceFor(sessionId) },
+      actions: { ...actions, loadOutputImage, openOutputFile, loadEarlierOutputs },
+    }
+  }
   ctx.effect(() => noticeApprovals({
     work,
     roster,
@@ -722,7 +779,50 @@ export function apply(ctx) {
         if (snapshot === undefined) throw new Error('ds-bot: Chat target is unavailable')
         return snapshot.nodes.turnDataSource(Number(turn), 'context')
       },
+      turnTriggers: turn => chat.getSnapshot().nodes.turnDataSource(Number(turn), 'turn-trigger'),
     } }
+  }
+
+  const toolRunsByChat = new WeakMap()
+  const toolSourceFor = sessionId => {
+    const binding = ctx.sessions.binding(sessionId)
+    if (binding === undefined) throw new Error(`ds-bot: unknown session "${sessionId}"`)
+    const chat = ctx.uiConversation.binding(binding).target('chat')
+    const jobs = ctx.get('jobs')
+    let source = toolRunsByChat.get(chat)
+    if (!source) {
+      let snapshot
+      let jobsSnapshot
+      let value = { runs: new Map(), active: [] }
+      source = {
+        getSnapshot() {
+          const next = chat.getSnapshot()
+          const nextJobs = jobs?.state?.getSnapshot()
+          if (next !== snapshot || nextJobs !== jobsSnapshot) {
+            snapshot = next; jobsSnapshot = nextJobs
+            const tools = activeToolRecords(next)
+            const background = (nextJobs?.rows?.[sessionId] ?? []).filter(job => job.owner === sessionId && (job.status === 'running' || job.status === 'stopping')).map(job => ({
+              key: job.id, name: job.kind, args: {}, object: job.progress ? `${job.label} · ${job.progress}` : job.label,
+              at: job.startedAt, background: true, status: job.status,
+            }))
+            value = { runs: toolRuns(next), active: tools.length ? tools : background, peer: activeReplyPeer(next) }
+          }
+          return value
+        },
+        subscribe: listener => {
+          const offChat = chat.subscribe(listener)
+          const offWatch = jobs?.watchRows?.(sessionId)
+          const offJobs = jobs?.state?.subscribe(listener)
+          return () => { offChat(); offJobs?.(); offWatch?.() }
+        },
+      }
+      toolRunsByChat.set(chat, source)
+    }
+    return source
+  }
+  const toolsFace = sessionId => {
+    const base = face()
+    return { ...base, hooks: { ...base.hooks, toolState: toolSourceFor(sessionId) } }
   }
 
   const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({ name, ...options }, component))
@@ -796,10 +896,10 @@ export function apply(ctx) {
     // Bot conversations are always flat, so the work-details mode is not a choice:
     // the mode is held at `verbose` while this group is mounted.
     holdFlatTranscript(ctx.configForms.get('ui-chat')),
-    shadow('conversation.session.header', { priority: -10, inject: face }, HeaderPill),
+    shadow('conversation.session.header', { priority: -10, inject: outputsFace }, HeaderPill),
     shadow('conversation.chat.node', { key: 'assistant-step', priority: -10, locale: 'chat', inject: assistantFace }, AssistantCell),
     shadow('conversation.chat.node', { key: 'turn-trigger', priority: -10, locale: 'chat', inject: face }, TriggerCell),
-    shadow('conversation.chat.node', { key: 'tool-call', priority: -10, locale: 'chat', inject: face }, ToolCell),
+    shadow('conversation.chat.node', { key: 'tool-call', priority: -10, locale: 'chat', inject: toolsFace }, ToolCell),
     shadow('conversation.chat.node', { key: 'turn-process', priority: -10, locale: 'chat', inject: face }, TurnProcessCell),
     shadow('conversation.chat.node', { key: 'turn-tail', priority: -10, locale: 'chat', inject: assistantFace }, TurnTailCell),
     // A Bot condenses its conversation without telling anyone; the chat keeps showing

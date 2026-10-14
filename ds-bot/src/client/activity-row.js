@@ -1,7 +1,8 @@
 import { createElement as h, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Shimmer, PHRASES } from './cells.js'
+import { Shimmer, recordActivity } from './cells.js'
 import { reducedMotion } from './motion.js'
 import { t } from './i18n.js'
+import { currentPart } from './text.js'
 
 // -------------------------------------------------------------------------
 // The activity row: the Bot's mark and a shimmering phrase at the transcript
@@ -9,7 +10,6 @@ import { t } from './i18n.js'
 // reply streams, and holds each phrase long enough to read.
 
 const PHRASE_HOLD_MS = 800
-const drawPhrase = pool => t(pool[Math.min(pool.length - 1, Math.floor(Math.random() * pool.length))])
 export function elapsedLabel(ms) {
   const minutes = Math.floor(ms / 60000)
   if (minutes < 60) return `${Math.max(1, minutes)}m`
@@ -61,34 +61,38 @@ function useRowEntrances(replacing) {
   }, [])
 }
 
-export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, useSession, actions }) {
+export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, useToolState, useSession, actions }) {
   const roster = useRoster(value => value)
   const running = useSessionStatus(map => map.get(sessionId)?.running === true)
   const liveKey = useLive(state => JSON.stringify(state[sessionId] ?? {}))
   const pendingInput = useSession(snapshot => Math.max(0, ...(snapshot?.pendingSubmissions ?? []).filter(sub => sub.placement !== 'queued').map(sub => sub.time)))
   const bot = roster.byId[sessionId]
+  const question = roster.questions?.[bot ? currentPart(bot) : sessionId]
   const room = roster.roomsById[sessionId]
   const entries = useMemo(() => Object.values(JSON.parse(liveKey)), [liveKey])
   const streaming = entries.some(entry => entry.text)
-  const tools = entries.filter(entry => !entry.text).sort((a, b) => a.at - b.at)
+  const active = useToolState(value => value.active)
+  const peer = useToolState(value => value.peer)
+  const peerName = peer ? roster.byId[peer.id]?.name ?? peer.name ?? t('another Bot') : undefined
+  const tools = active.length ? active.map(record => recordActivity(record, roster)) : entries.filter(entry => !entry.text).sort((a, b) => a.at - b.at)
   const relaying = tools.some(entry => entry.relay)
-  const visible = running && (bot !== undefined || room !== undefined)
+  const visible = (running || active.length > 0 || question !== undefined) && (bot !== undefined || room !== undefined)
   const tool = tools.at(-1)
   const inputRef = useRef(0)
   const inputAt = Math.max(inputRef.current, pendingInput)
   inputRef.current = inputAt
   const want = !visible ? null
-    : streaming ? { key: 'replying', label: t('Generating a response'), state: 'working' }
+    : question ? { key: 'question', label: t('Waiting for your answer'), state: 'alert' }
+      : streaming ? { key: 'replying', label: t('Generating a response'), state: 'working' }
       : relaying ? { key: 'relaying', label: tool?.label ?? t('Coordinating with Bots'), state: tool?.state ?? 'working' }
-        : inputAt > (tool?.at ?? 0)
-          ? { key: `input:${inputAt}`, pool: PHRASES.thinking, state: 'thinking' }
-          : tool ? { key: tool.label ? `tool:${tool.label}` : 'working', label: tool.label, pool: PHRASES.working, state: tool.state ?? 'working' }
-            : { key: 'thinking', pool: PHRASES.thinking, state: 'thinking' }
+        : tool ? { key: `tool:${tool.label}:${tool.at}`, at: tool.at, label: tool.label ?? t('Using tools'), state: tool.state ?? 'working' }
+          : peer ? { key: `peer:${peer.id}`, label: t('Replying to {name}', { name: peerName }), state: 'working' }
+            : { key: 'thinking', label: t('Waiting for model response'), state: 'thinking' }
   const [shown, setShown] = useState(null)
   const wantKey = want?.key ?? null
   useEffect(() => {
     if (wantKey === null || shown?.key === wantKey) return undefined
-    const make = () => setShown({ key: wantKey, text: want.label ?? drawPhrase(want.pool), at: Date.now() })
+    const make = () => setShown({ key: wantKey, text: want.label, at: Date.now(), startedAt: want.at ?? Date.now() })
     const wait = shown ? shown.at + PHRASE_HOLD_MS - Date.now() : 0
     if (wait <= 0) { make(); return undefined }
     const timer = setTimeout(make, wait)
@@ -114,12 +118,14 @@ export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useL
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
     if (phase !== 'in') return undefined
-    const timer = setInterval(() => setNow(Date.now()), 10000)
+    const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [phase])
   if (phase === null || !shown) return null
-  const elapsed = now - shown.at >= 60000 ? elapsedLabel(now - shown.at) : null
+  const duration = Math.max(0, now - shown.startedAt)
+  const elapsed = duration >= 60000 ? elapsedLabel(duration) : duration >= 1000 ? `${Math.floor(duration / 1000)}s` : null
+  const pending = tool && inputAt > (tool.at ?? 0)
   return h('span', { className: 'bt-pill-status', 'data-exiting': phase === 'out' ? '' : undefined, role: 'status', 'aria-live': 'polite' },
-    h('span', { key: `${shown.key}:${shown.at}`, className: 'bt-pill-status-label' }, h(Shimmer, null, `${shown.text}…`)),
+    h('span', { key: `${shown.key}:${shown.at}`, className: 'bt-pill-status-label', title: shown.text }, h(Shimmer, null, `${shown.text}${pending ? ` · ${t('Message pending')}` : ''}`)),
     elapsed ? h('span', { className: 'bt-pill-status-time' }, `· ${elapsed}`) : null)
 }

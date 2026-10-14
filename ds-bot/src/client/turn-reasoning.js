@@ -1,8 +1,8 @@
 // Settled reasoning of every loaded step in a Turn, shown once on the first step that has
 // reasoning: only steps with reasoning get a reasoning part to render it. A step still
 // thinking stays out until it settles; the activity row shows it meanwhile.
-export function turnReasoning(steps, current) {
-  const members = steps.length ? steps : [current]
+export function turnReasoning(steps, current, replyStep) {
+  const members = (steps.length ? steps : [current]).filter(step => step.step !== replyStep)
   if (members.find(step => stepReasoning(step) !== '')?.step !== current.step) return ''
   return members.filter(step => !thinkingLive(step)).map(stepReasoning).filter(Boolean).join('\n\n')
 }

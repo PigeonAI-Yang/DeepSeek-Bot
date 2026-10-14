@@ -4,11 +4,12 @@ import { currentPart, latestMemoryChange } from './text.js'
 import { ArrowUpIcon, CloseIcon, ArrowDownIcon, MemoryIcon } from './icons.js'
 import { botState, BotAvatar, RoomAvatar } from './mark.js'
 import { ActivityIndicator } from './activity-row.js'
-import { clockLabel, openingTurn, unseenSince, Shimmer, workPhrase } from './cells.js'
+import { clockLabel, openingTurn, unseenSince, Shimmer, workPhrase, recordActivity } from './cells.js'
 import { modelOf } from './model-menu.js'
 import { NO_WORK, busyMembers, summaryText } from './member-status.js'
 import { dateLocale, t } from './i18n.js'
 import { SPRING_SHAPE, SPRING_STRETCH, reducedMotion } from './motion.js'
+import { OutputsCard } from './outputs-card.js'
 
 // -------------------------------------------------------------------------
 // Conversation header
@@ -46,10 +47,13 @@ function MemoryNotice({ shown }) {
     h('span', { className: 'bt-pill-mem-in', ref: inner }, h('span', { className: 'bt-pill-mem-ico' }, h(MemoryIcon)), label))
 }
 
-function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, panelId, style, expanded, busy = [], memberStatus = '' }) {
+function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, useToolState, panelId, style, expanded, busy = [], memberStatus = '' }) {
   const liveKey = useLive(state => JSON.stringify(state[sessionId] ?? {}))
   const entries = useMemo(() => Object.entries(JSON.parse(liveKey)), [liveKey])
-  const tools = entries.filter(([, entry]) => !entry?.text)
+  const active = useToolState(value => value.active)
+  const peer = useToolState(value => value.peer)
+  const peerName = peer ? roster.byId[peer.id]?.name ?? peer.name ?? t('another Bot') : undefined
+  const tools = active.length ? active.map(record => [record.key, recordActivity(record, roster)]) : entries.filter(([, entry]) => !entry?.text)
   const memberActivities = busy.map(member => ({
     id: member.id,
     entry: {
@@ -58,14 +62,14 @@ function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, panelId,
     },
   }))
   const hasQuestion = roster.questions?.[bot ? currentPart(bot) : sessionId] !== undefined
-  const status = memberStatus || (!running
+  const status = memberStatus || (hasQuestion ? t('Waiting for your answer') : !running && active.length === 0
     ? hasQuestion ? t('Waiting for your answer') : t('Idle')
     : entries.some(([, entry]) => entry?.text) ? t('Generating a response')
       : entries.some(([, entry]) => entry?.relay) ? t('Coordinating with Bots')
-        : tools.length > 0 ? t('Using tools') : t('Thinking about it'))
+        : tools.length > 0 ? tools.at(-1)[1].label : peer ? t('Replying to {name}', { name: peerName }) : t('Waiting for model response'))
   const model = bot ? modelOf(bot, roster) : undefined
   const activities = busy.length > 0 ? memberActivities.slice(0, 4)
-    : running ? tools.map(([id, entry]) => ({ id, entry }))
+    : running || active.length ? tools.map(([id, entry]) => ({ id, entry }))
       .sort((a, b) => (Number.isFinite(b.entry?.at) ? b.entry.at : 0) - (Number.isFinite(a.entry?.at) ? a.entry.at : 0)).slice(0, 4)
       : []
   return h('div', {
@@ -91,11 +95,12 @@ function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, panelId,
           : ''
         return h('li', { key: id, className: 'bt-runtime-activity-item' },
           h('span', { className: 'bt-runtime-activity-label' }, label),
+          entry.details ? h('pre', { className: 'bt-runtime-command' }, entry.details) : null,
           started ? h('span', { className: 'bt-runtime-activity-started' }, `${t('Activity started')} · ${started}`) : null)
       })) : null))
 }
 
-export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, actions }) {
+export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useToolState, useWork, useOutputs, actions }) {
   const roster = useRoster(value => value)
   const work = useWork?.(value => value) ?? NO_WORK
   const title = useSessions(list => list.byId[sessionId]?.displayTitle ?? list.byId[sessionId]?.title ?? '')
@@ -301,12 +306,13 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
       : room ? h(RoomAvatar, { room, roster, size: 24 }) : null,
     h('span', { className: 'bt-pill-name' }, bot?.name ?? room?.name ?? (title || t('New chat'))),
     memberStatus ? h('span', { className: 'bt-pill-status', role: 'status', 'aria-live': 'polite' }, h('span', { className: 'bt-pill-status-label' }, h(Shimmer, null, memberStatus)))
-      : h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, actions }),
+      : h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, useToolState, actions }),
     h(MemoryNotice, { shown: memoryNotice }),
     h('span', { className: 'bt-pill-go', 'aria-hidden': true }, h(GoArrow))),
-    mounted && panelStyle ? h(RuntimeStatusPanel, { sessionId, bot, roster, running, useLive, panelId, style: panelStyle, expanded, busy, memberStatus }) : null),
+    mounted && panelStyle ? h(RuntimeStatusPanel, { sessionId, bot, roster, running, useLive, useToolState, panelId, style: panelStyle, expanded, busy, memberStatus }) : null),
     h('span', { className: 'bt-sr', role: 'status' }, memoryNotice ? t('Memory updated') : ''),
-    h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }))
+    h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
+    h(OutputsCard, { key: sessionId, sessionId, useOutputs, useSession, actions }))
 }
 
 // New-message pills. "N new messages ↓" takes Back to bottom's place when

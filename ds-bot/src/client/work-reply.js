@@ -1,4 +1,4 @@
-export function workReplyText(steps) {
+export function workReplyText(steps, fallback = '') {
   if (!Array.isArray(steps)) return ''
   const texts = []
   for (const step of steps) {
@@ -7,5 +7,6 @@ export function workReplyText(steps) {
       if (block?.kind === 'text' && typeof block.text === 'string' && block.text.trim() !== '') texts.push(block.text)
     }
   }
+  if (fallback) texts.push(fallback)
   return texts.join('\n\n')
 }

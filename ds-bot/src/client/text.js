@@ -213,6 +213,59 @@ export function normalizeWindowsMarkdownPaths(text) {
   return copied === 0 ? text : output + text.slice(copied)
 }
 
+function localOutputDestination(destination) {
+  if (typeof destination !== 'string' || destination === '' || destination.includes('?')) return null
+  if (/^(?:https?:\/\/)?bots\.local(?:[/:?#]|$)/i.test(destination)) return null
+  let path = destination.split('#', 1)[0]
+  if (/^[a-z][a-z\d+.-]*:/i.test(path) && !/^[a-z]:[\\/]/i.test(path)) return null
+  if (path.startsWith('//') || path.startsWith('\\\\')) return null
+  if (/^[a-z]:[\\/]/i.test(path)) path = path.replace(/\\+/g, '/')
+  else if (path.includes('\\')) path = path.replace(/\\+/g, '/')
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0 || dot === name.length - 1) return null
+  return path
+}
+
+// Explicit local Markdown links are authored file references. Keep this scanner in
+// step with normalizeWindowsMarkdownPaths: code and prose paths are not outputs.
+export function markdownOutputLinks(text) {
+  if (typeof text !== 'string' || !text.includes('[')) return []
+  const links = []
+  for (let cursor = 0; cursor < text.length;) {
+    if (cursor === 0 || text[cursor - 1] === '\n' || text[cursor - 1] === '\r') {
+      const opening = fenceOpening(text, cursor)
+      if (opening) { cursor = skipFence(text, opening); continue }
+    }
+    if (text[cursor] === '`' && !escapedAt(text, cursor)) {
+      const openingEnd = backtickRunEnd(text, cursor)
+      const end = inlineCodeEnd(text, cursor, openingEnd)
+      cursor = end < 0 ? openingEnd : end
+      continue
+    }
+    let opening = cursor
+    if (text[cursor] === '!' && text[cursor + 1] === '[') {
+      if (escapedAt(text, cursor)) { cursor += 1; continue }
+      opening += 1
+    } else if (text[cursor] !== '[' || text[cursor - 1] === '!' || escapedAt(text, cursor)) {
+      cursor += 1
+      continue
+    }
+    const link = parseLink(text, opening)
+    if (!link) { cursor += 1; continue }
+    const destination = localOutputDestination(text.slice(link.destinationStart, link.destinationEnd))
+    if (destination) {
+      const labelEndIndex = labelEnd(text, opening)
+      links.push({
+        label: labelEndIndex < 0 ? '' : text.slice(opening + 1, labelEndIndex),
+        destination,
+      })
+    }
+    cursor = link.end
+  }
+  return links
+}
+
 // The Bots a text calls, by the rule the group host reads (shared/mentions.js). The
 // speaker's own name takes part so that it is never read as a shorter name inside it
 // ("@新 Bot" in "@新 Bot 2"); it then stays plain text.
