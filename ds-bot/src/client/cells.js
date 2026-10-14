@@ -1,4 +1,4 @@
-import { createElement as h, Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { DisclosureRow, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { inkText } from './inks.js'
@@ -22,7 +22,7 @@ const mdLabels = () => ({ code: { copyLabel: t('Copy'), copiedLabel: t('Copied')
 
 // `lead` (a sender avatar in group chats) sits beside the last bubble, in the same
 // row, so it lines up with the bubble whether or not reactions hang below it.
-export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead, showTools = true }) {
+export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead, showTools = true, mentions }) {
   const onClick = (event) => {
     const target = mentionTarget(event)
     if (target === null) return
@@ -41,7 +41,7 @@ export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, 
         h('div', { className: 'bt-msg-line' },
           lead && last ? lead : null,
           h('div', { className: 'bt-bubble' },
-            h(MarkdownText, { text: linkMentions(normalizeWindowsMarkdownPaths(text), roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact' })),
+            h(MarkdownText, { text: linkMentions(normalizeWindowsMarkdownPaths(text), roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact', fileMentions: mentions })),
         ),
         !showTools || live ? null : h(MessageTools, { text, name: roster.byId[selfId]?.name ?? t('Bot'), sessionId, react: key ? emoji => actions.toggleReaction(msgKey, index, emoji) : undefined, actions }),
         picked.length ? h('div', { className: 'bt-reacts' }, picked.map(emoji => h('button', {
@@ -122,11 +122,25 @@ function ThinkingRow({ text }) {
       h('div', { className: 'bt-think-text' }, text)))
 }
 
-export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
+// The files a finished turn changed or delivered, linked from inline code in its
+// reply as in DSH's own chat. DSH resolves them for the step that closes the turn.
+function useFileMentions({ node, openFile, fileMentions, useTurnData }) {
+  const tail = useTurnData?.('turn-tail')
+  const location = node.location
+  const turn = location?.kind === 'turn' || location?.kind === 'step' ? location.turn : undefined
+  const seq = node.data.finalNode?.seq
+  return useMemo(() => {
+    if (typeof fileMentions !== 'function' || turn?.status !== 'closed' || seq === undefined) return undefined
+    return tail?.closing?.finalNode.seq === seq ? fileMentions({ turn, seq, openFile }) : undefined
+  }, [fileMentions, openFile, seq, tail, turn])
+}
+
+export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, useTurnData, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
   const roster = useRoster(value => value)
   const data = node.data
   const steps = useTurnSteps(String(data.turn))
   const contexts = useTurnContext(String(data.turn))
+  const mentions = useFileMentions({ node, openFile, fileMentions, useTurnData })
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn)
   const texts = groupPart === 'reasoning' ? [] : data.blocks.filter(block => block.kind === 'text' && block.text.trim() !== '').map(block => block.text)
   const running = data.status === 'running'
@@ -154,7 +168,7 @@ export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, us
       })
     }),
     reasoning ? h(ThinkingRow, { text: reasoning }) : null,
-    texts.length ? h(Bubbles, { texts, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi, showTools: false }) : null)
+    texts.length ? h(Bubbles, { texts, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi, showTools: false, mentions }) : null)
 }
 
 function EventLine({ prefix, bots, joiner = t('and'), onOpen, whole = false }) {
@@ -174,7 +188,7 @@ function EventLine({ prefix, bots, joiner = t('and'), onOpen, whole = false }) {
 }
 
 // One Bot message inside a group chat: avatar, name (with its group role), bubble.
-function GroupMessage({ bot, text, room, roster, actions, msgKey, useUi }) {
+function GroupMessage({ bot, text, texts = [text], room, roster, actions, msgKey, useUi }) {
   const lead = h('button', { type: 'button', className: 'bt-lead', 'aria-label': t("Open {name}'s chat", { name: bot.name }), onClick: () => actions.openSession(bot.id) },
     h(BotMark, { bot, size: 22 }))
   return h('div', { className: 'bt-group-msg' },
@@ -182,7 +196,19 @@ function GroupMessage({ bot, text, room, roster, actions, msgKey, useUi }) {
       lead,
       h('span', { className: 'bt-group-name', style: { color: inkText(colorOf(bot)) } }, bot.name,
         room?.admin === bot.id ? h('span', { className: 'bt-group-role' }, t('Admin')) : null)),
-    h(Bubbles, { texts: [text], roster, selfId: bot.id, actions, sessionId: room?.id, msgKey, useUi }))
+    h(Bubbles, { texts, roster, selfId: bot.id, actions, sessionId: room?.id, msgKey, useUi }))
+}
+
+// A member's messages in a row, as one block under its name: what it says while it
+// works comes one message at a time.
+export function stackReplies(replies) {
+  const items = []
+  replies.forEach((reply, index) => {
+    const last = items.at(-1)
+    if (reply.kind === undefined && last?.reply.kind === undefined && last?.reply.botId === reply.botId) last.texts.push(reply.text)
+    else items.push({ reply, index, texts: reply.kind === undefined ? [reply.text] : [] })
+  })
+  return items
 }
 
 // A centered event line that names a group chat and opens it.
@@ -382,7 +408,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       const prompts = reminderPrompts(contentText(data.content))
       return h('div', { className: 'bt-event' }, prompts.length > 0 ? t('Scheduled task: {text}', { text: prompts.join(' · ').slice(0, 80) }) : t('Routine started'))
     }
-    if (source.kind === 'user-question-reply') return null
+    if (source.kind === 'user-question-reply' || source.kind === 'goal') return null
     return h('div', { className: 'bt-event' }, contentText(data.content).slice(0, 80) || t('Update'))
   }
 }
@@ -450,32 +476,32 @@ export function openingTurn(turns, firstTurns, hiddenTurns) {
 // Began after the user last left the conversation and before this visit opened it.
 export const unseenSince = (visit, time) => typeof visit?.seen === 'number' && time > visit.seen && time <= visit.entered
 
-// A turn's tail sits right before the next turn's first row, so the separator for a
-// pause between turns renders here.
-export function TurnTailCell({ node, sessionId, useRoster, useTurnSteps, useTurnTriggers, useTurnClock, useUi, actions }) {
-  const data = node.data
+export function TurnTailCell({ turn: location, sessionId, useRoster, useTurnSteps, useTurnTriggers, useTurnClock, useUi, actions }) {
+  const turn = location.turn
+  const time = location.end.time
   const roster = useRoster(value => value)
-  const steps = useTurnSteps(String(data.turn))
-  const triggers = useTurnTriggers(String(data.turn))
-  useEffect(() => { actions.noteTurnTime(sessionId, data.turn, 'end', data.time) }, [sessionId, data.turn, data.time])
+  const steps = useTurnSteps(String(turn))
+  const triggers = useTurnTriggers(String(turn))
+  const data = { turn, closing: steps.at(-1) }
+  useEffect(() => { actions.noteTurnTime(sessionId, turn, 'end', time) }, [sessionId, turn, time])
   const label = useTurnClock((state) => {
-    const start = nextTurnStart(state[sessionId] ?? {}, data.turn)
-    return start !== undefined && start - data.time >= SEPARATOR_GAP_MS ? clockLabel(start) : ''
+    const start = nextTurnStart(state[sessionId] ?? {}, turn)
+    return start !== undefined && start - time >= SEPARATOR_GAP_MS ? clockLabel(start) : ''
   })
   // The unread divider sits before the first turn that began after the last visit;
   // turns that begin while the conversation is open were watched live.
   const visit = useUi(state => state.visits?.[sessionId])
   const fresh = useTurnClock((state) => {
-    if (typeof visit?.seen !== 'number' || data.time > visit.seen) return false
-    const start = nextTurnStart(state[sessionId] ?? {}, data.turn)
+    if (typeof visit?.seen !== 'number' || time > visit.seen) return false
+    const start = nextTurnStart(state[sessionId] ?? {}, turn)
     return start !== undefined && start > visit.seen && start <= visit.entered
   })
   const notedPeer = useTurnClock(state => state[sessionId]?.[data.turn]?.peer)
   const peerId = triggers.find(trigger => trigger.source?.kind === 'bot' && trigger.source?.senderSessionId)?.source.senderSessionId ?? notedPeer
   const peer = roster.byId[peerId]
-  const replied = peer && isHiddenTurn(roster, sessionId, data.turn) && node.location?.turn?.end?.data?.reason?.kind === 'completed' && data.closing
+  const replied = peer && isHiddenTurn(roster, sessionId, data.turn) && location.end?.data?.reason?.kind === 'completed' && data.closing
   const visible = roster.byId[sessionId] && !roster.roomsById[sessionId] && !isHiddenTurn(roster, sessionId, data.turn)
-  const fallback = visible ? completedReasoningReply(steps.length ? steps : data.closing ? [data.closing] : [], node.location?.turn) : undefined
+  const fallback = visible ? completedReasoningReply(steps.length ? steps : data.closing ? [data.closing] : [], location) : undefined
   const reply = visible
     ? workReplyText(steps, fallback?.text)
     : ''
@@ -541,10 +567,17 @@ function toolActivity(name, arg, findBot, self) {
   }
 }
 
-// What a Bot busy elsewhere is doing, from its current tool alone.
-export function workPhrase(tool) {
+// What a Bot busy elsewhere is doing: what it said in the step it is on, its running
+// call's own description, else the kind of tool and what it works on. `doing` is a work
+// entry, or just a tool name.
+export function workPhrase(doing) {
+  const { tool, said, note, target, switching } = typeof doing === 'string' ? { tool: doing } : doing ?? {}
+  if (switching) return t('Moving to a fresh conversation')
+  const own = (said || note)?.replace(/[\s.。…]+$/u, '')
+  if (own) return own
   if (!tool) return t('Waiting for model response')
-  return t('Executing {tool}', { tool })
+  const label = t('Executing {tool}', { tool })
+  return target ? `${label} · ${target}` : label
 }
 
 export function recordActivity(record, roster) {
@@ -593,10 +626,11 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
   // Members speak one at a time, so only the current speaker is typing.
   const pending = done || !live.speaking ? [] : [live.speaking]
   const speakerTool = useWork?.(work => work.bots?.[live.speaking]?.tool) ?? undefined
+  const speakerDoing = useWork?.(work => (work.bots?.[live.speaking]?.tool ? workPhrase(work.bots[live.speaking]) : undefined)) ?? undefined
   if (replies.length === 0 && pending.length === 0) return null
   const room = roster.roomsById[sessionId]
   return h('div', { className: 'bt-group-replies' },
-    replies.map((reply, index) => {
+    stackReplies(replies).map(({ reply, index, texts }) => {
       const bot = roster.byId[reply.botId] ?? { id: reply.botId, name: reply.name, color: reply.color ?? 'gray' }
       if (reply.kind === 'user') {
         return h('div', { key: `user-${index}`, className: 'bt-urow' }, h('div', { className: 'bt-ububble' },
@@ -627,14 +661,14 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       if (reply.kind === 'stopped') {
         return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t("You stopped {name}'s work", { name: bot.name }))
       }
-      return h(GroupMessage, { key: `${reply.botId}-${index}`, bot, text: reply.text, room, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : undefined, useUi })
+      return h(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts, room, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : undefined, useUi })
     }),
     pending.map((id) => {
       const bot = roster.byId[id]
       if (!bot) return null
       return h('div', { key: `pending-${id}`, className: 'bt-activity' },
         h(BotMark, { bot: bot, size: 22, state: speakerTool ? toolState(speakerTool) : 'thinking' }),
-        h(Shimmer, null, speakerTool ? `${bot.name} · ${workPhrase(speakerTool)}…` : t('{name} is typing…', { name: bot.name })))
+        h(Shimmer, null, speakerDoing ? `${bot.name} · ${speakerDoing}…` : t('{name} is typing…', { name: bot.name })))
     }))
 }
 
@@ -709,91 +743,116 @@ function GenericToolRecords({ root, records = toolRecords(root) }) {
     : h(GenericToolRecord, { record: records[0] })) : null
 }
 
-export function ToolCell({ node, sessionId, useRoster, useUi, useWork, useToolState, actions, renderMessageImages }) {
-  const roster = useRoster(value => value)
-  const run = useToolState(value => value.runs.get(node.key))
-  const root = node.data.root
-  const done = root.kind === 'tool-result'
-  const turn = node.location?.turn?.turn ?? root.turn
-  const hidden = isHiddenTurn(roster, sessionId, turn)
-  const tool = toolName(root)
-  const { text: arg, value: argValue } = toolArgs(root)
-  const findBot = nameOrId => roster.byId[nameOrId] ?? roster.bots.find(bot => bot.name.toLowerCase() === String(nameOrId ?? '').toLowerCase())
-  useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, done || hidden ? null : toolActivity(tool, arg, findBot, roster.byId[sessionId]))
-  if (hidden) return null
-  if (run?.hidden) return h('span', { className: 'bt-tool-merged', hidden: true })
-  const renderToolBody = () => {
-    switch (tool) {
-      case 'message_bot': {
-        const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
-        if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't message {name}", { name: target.name }))
-        return h(EventLine, { prefix: t('Messaged'), bots: [target], onOpen: bot => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true })
-      }
-      case 'stop_bot': {
-        const target = findBot(arg('bot')) ?? { name: arg('bot') ?? '…', color: 'gray' }
-        if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't stop {name}", { name: target.name }))
-        return h(EventLine, { prefix: t('Stopped'), bots: [target], onOpen: bot => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id), whole: true })
-      }
-      case 'create_bot': {
-        const created = findBot(arg('name'))
-        if (!done || created === undefined) return null
-        return h(EventLine, { prefix: t('Created'), bots: [created], onOpen: bot => actions.openSession(bot.id) })
-      }
-      case 'update_bot': {
-        const target = findBot(arg('name')) ?? findBot(arg('bot')) ?? (arg('bot') ? undefined : roster.byId[sessionId])
-        return done && target ? h(EventLine, { prefix: t('Updated'), bots: [target], onOpen: bot => actions.openSession(bot.id) }) : null
-      }
-      case 'group_relay':
-        return h(GroupReplies, { sessionId, callId: root.callId, done, content: root.content, roster, actions, useUi, useWork })
-      case 'create_group':
-      case 'update_group':
-      case 'delete_group':
-      case 'post_to_group': {
-        const verbs = {
-          create_group: ['Created group', "Couldn't create the group"],
-          update_group: ['Updated group', "Couldn't update the group"],
-          delete_group: ['Deleted group', "Couldn't delete the group"],
-          post_to_group: ['Posted in', "Couldn't post in the group"],
-        }[tool]
-        if (!done) return null
-        // Tool results quote the group's name; anything else is a refusal.
-        const result = contentText(root.content)
-        const named = /^(Created group|Updated|Nothing changed in|Deleted|Posted in) "([^"]+)"/.exec(result)
-        if (root.isError || !named) return h('div', { className: 'bt-event', title: result }, t(verbs[1]))
-        const name = named[2]
-        const room = roster.rooms.find(entry => entry.name === name)
-        return h(GroupEvent, { prefix: t(verbs[0]), room: tool === 'delete_group' ? undefined : room, name, roster, actions })
-      }
-      case 'ask_user': {
-        const question = roster.questions?.[sessionId]
-        // Answered or closed: the card leaves no gap where it was.
-        if (!question || question.callId !== root.callId) return h('span', { className: 'bt-q-gone', hidden: true })
-        return h(PendingQuestion, { sessionId, question, actions, inline: true })
-      }
-      case 'request_secret':
-        return h(SecretToolCell, { sessionId, callId: root.callId, name: arg('name'), done, content: root.content, roster, actions })
-      case 'ask_user_question': {
-        if (!done) return null
-        let parsed = null
-        try { parsed = JSON.parse(contentText(root.content)) } catch { parsed = null }
-        const answer = parsed?.answers?.[0]
-        const question = argValue('questions')?.[0]
-        if (!answer) return null
-        return h('div', { className: 'bt-q-inline' }, h(SettledQuestion, { question, answer }))
-      }
-      case 'read_group_chat': {
-        if (!done) return null
-        const room = roster.rooms.find(entry => entry.name === arg('group'))
-        return room ? h(GroupEvent, { prefix: t('Read'), room, roster, actions }) : null
-      }
-      case 'remember':
-      case 'forget':
-        return done && !root.isError ? h(MemoryEvent, { sessionId, scope: arg('scope'), result: contentText(root.content), roster, actions, findBot }) : null
-      default:
-        return h(GenericToolRecords, { root, records: run?.records })
-    }
+// The calls ToolCell draws. A PTC program (`run_code`) dispatches the real tools as
+// its sub-calls, so a call draws by its own name wherever it sits in the tree.
+const DRAWN = new Set(['message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'ask_user_question', 'read_group_chat', 'remember', 'forget'])
+// Calls whose card a dock above the composer carries when the call is not drawn.
+const CARDS = new Set(['ask_user', 'request_secret'])
+
+// The root and its sub-calls in dispatch order, each call once.
+export function callTree(root) {
+  const calls = []
+  const seen = new Set()
+  const visit = (call) => {
+    const id = call.callId ?? call
+    if (seen.has(id)) return
+    seen.add(id)
+    calls.push(call)
+    for (const child of call.subCalls ?? []) visit(child)
   }
-  const body = renderToolBody()
+  visit(root)
+  return calls
+}
+
+// Tells the docks which card calls the transcript draws, so a card shows in one place.
+// A layout effect: the dock drops its copy of the card before the first paint.
+function useShownCards(actions, sessionId, callIds) {
+  const key = JSON.stringify(callIds)
+  useLayoutEffect(() => {
+    const ids = JSON.parse(key)
+    if (ids.length === 0 || !actions.noteCards) return undefined
+    actions.noteCards(sessionId, ids, 1)
+    return () => actions.noteCards(sessionId, ids, -1)
+  }, [sessionId, key])
+}
+
+function renderCall(call, { sessionId, roster, actions, useUi, useWork, findBot }) {
+  const tool = toolName(call)
+  const done = call.kind === 'tool-result'
+  const { text: arg, value: argValue } = toolArgs(call)
+  const self = roster.byId[sessionId]
+  switch (tool) {
+    case 'message_bot': {
+      const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
+      if (done && call.isError) return h('div', { className: 'bt-event' }, t("Couldn't message {name}", { name: target.name }))
+      return h(EventLine, { prefix: t('Messaged'), bots: [target], onOpen: bot => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true })
+    }
+    case 'stop_bot': {
+      const target = findBot(arg('bot')) ?? { name: arg('bot') ?? '…', color: 'gray' }
+      if (done && call.isError) return h('div', { className: 'bt-event' }, t("Couldn't stop {name}", { name: target.name }))
+      return h(EventLine, { prefix: t('Stopped'), bots: [target], onOpen: bot => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true })
+    }
+    case 'create_bot': {
+      const created = findBot(arg('name'))
+      if (!done || created === undefined) return null
+      return h(EventLine, { prefix: t('Created'), bots: [created], onOpen: bot => actions.openSession(bot.id) })
+    }
+    case 'update_bot': {
+      const target = findBot(arg('name')) ?? findBot(arg('bot')) ?? (arg('bot') ? undefined : self)
+      return done && target ? h(EventLine, { prefix: t('Updated'), bots: [target], onOpen: bot => actions.openSession(bot.id) }) : null
+    }
+    case 'group_relay':
+      return h(GroupReplies, { sessionId, callId: call.callId, done, content: call.content, roster, actions, useUi, useWork })
+    case 'create_group':
+    case 'update_group':
+    case 'delete_group':
+    case 'post_to_group': {
+      const verbs = {
+        create_group: ['Created group', "Couldn't create the group"],
+        update_group: ['Updated group', "Couldn't update the group"],
+        delete_group: ['Deleted group', "Couldn't delete the group"],
+        post_to_group: ['Posted in', "Couldn't post in the group"],
+      }[tool]
+      if (!done) return null
+      // Tool results quote the group's name; anything else is a refusal.
+      const result = contentText(call.content)
+      const named = /^(Created group|Updated|Nothing changed in|Deleted|Posted in) "([^"]+)"/.exec(result)
+      if (call.isError || !named) return h('div', { className: 'bt-event', title: result }, t(verbs[1]))
+      const name = named[2]
+      const room = roster.rooms.find(entry => entry.name === name)
+      return h(GroupEvent, { prefix: t(verbs[0]), room: tool === 'delete_group' ? undefined : room, name, roster, actions })
+    }
+    case 'ask_user': {
+      const question = roster.questions?.[sessionId]
+      // Answered or closed: the card leaves no gap where it was.
+      if (!question || question.callId !== call.callId) return h('span', { className: 'bt-q-gone', hidden: true })
+      return h(PendingQuestion, { sessionId, question, actions, inline: true })
+    }
+    case 'request_secret':
+      return h(SecretToolCell, { sessionId, callId: call.callId, name: arg('name'), done, content: call.content, roster, actions })
+    case 'ask_user_question': {
+      if (!done) return null
+      let parsed = null
+      try { parsed = JSON.parse(contentText(call.content)) } catch { parsed = null }
+      const answer = parsed?.answers?.[0]
+      const question = argValue('questions')?.[0]
+      if (!answer) return null
+      return h('div', { className: 'bt-q-inline' }, h(SettledQuestion, { question, answer }))
+    }
+    case 'read_group_chat': {
+      if (!done) return null
+      const room = roster.rooms.find(entry => entry.name === arg('group'))
+      return room ? h(GroupEvent, { prefix: t('Read'), room, roster, actions }) : null
+    }
+    case 'remember':
+    case 'forget':
+      return done && !call.isError ? h(MemoryEvent, { sessionId, scope: arg('scope'), result: contentText(call.content), roster, actions, findBot }) : null
+    default:
+      return null
+  }
+}
+
+function ImageInspectionCards({ root, renderMessageImages }) {
   const cards = imageInspections(root).map(image => {
     const label = image.label ?? t('Read image')
     const { width, height } = image.attachment
@@ -826,5 +885,32 @@ export function ToolCell({ node, sessionId, useRoster, useUi, useWork, useToolSt
         h('span', { className: 'bt-image-inspection-name', title: label }, label),
         dimensions ? h('span', { className: 'bt-image-inspection-meta' }, dimensions) : null))
   })
-  return cards.length ? h(Fragment, null, body, ...cards) : body
+  return cards.length ? h(Fragment, null, ...cards) : null
+}
+
+export function ToolCell({ node, sessionId, useRoster, useUi, useWork, useToolState, actions, renderMessageImages }) {
+  const roster = useRoster(value => value)
+  const root = node.data.root
+  const turn = node.location?.turn?.turn ?? root.turn
+  const hidden = isHiddenTurn(roster, sessionId, turn)
+  const findBot = nameOrId => roster.byId[nameOrId] ?? roster.bots.find(bot => bot.name.toLowerCase() === String(nameOrId ?? '').toLowerCase())
+  const calls = hidden ? [] : callTree(root)
+  const drawn = calls.filter(call => DRAWN.has(toolName(call)))
+  // The newest call still running names the work, so a program reads as the tool it is in.
+  const running = root.kind === 'tool-result' ? undefined : calls.findLast(call => call.kind !== 'tool-result')
+  const note = running ? toolActivity(toolName(running), toolArgs(running).text, findBot, roster.byId[sessionId]) : null
+  // A running tool shows only as the activity row's phrase.
+  useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, note)
+  useShownCards(actions, sessionId, drawn.filter(call => CARDS.has(toolName(call)) && call.callId).map(call => call.callId))
+  const run = useToolState(value => value.runs.get(node.key))
+  if (hidden) return null
+  if (run?.hidden) return h('span', { className: 'bt-tool-merged', hidden: true })
+  const records = run?.records ?? toolRecords(root)
+  const images = imageInspections(root)
+  if (!drawn.length && !records.length && !images.length) return null
+  const env = { sessionId, roster, actions, useUi, useWork, findBot }
+  return h(Fragment, null,
+    drawn.map((call, index) => h(Fragment, { key: call.callId ?? index }, renderCall(call, env))),
+    h(GenericToolRecords, { root, records }),
+    images.length ? h(ImageInspectionCards, { root, renderMessageImages }) : null)
 }

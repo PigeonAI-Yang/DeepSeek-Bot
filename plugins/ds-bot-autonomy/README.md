@@ -32,6 +32,8 @@ The injected `dsBotAutonomy` service exposes `submit`, `get`, `list`, `stop`, `r
 
 ## Runtime behavior
 
+On DS Bot 0.1.6, ordinary `/goal` commands remain blocked in Bot chats. The host exempts only the exact native Goal bound to this plugin's live task, Agent, Session, and Stop generation. Goal creation stays hidden; reads and updates of an owned Goal continue through the native tools and their authorization checks. Stop, unload, stale parts, and foreign Goals revoke the exemption.
+
 With native Jobs available, DS Bot shell calls use `run_in_background: true` and job reads use `wait: false`. The process continues while the same Bot handles new human messages, and its native completion notice brings the result back. Foreground shell calls and blocking job reads are rejected before dispatch; native permissions and cancellation remain authoritative. Managed Goal continuation waits without consuming rounds and resumes only for the same active task generation. User Stop, job kill, teardown, and changed Goals do not resume it. This applies to new calls; an existing foreground call cannot be converted without cancelling it.
 
 Each task owns one native Goal for one exact Agent and Session. A queued task waits while its Agent is busy, a foreign Goal is unfinished, or another task owns the Bot resource. The saved round limit is total across Session part moves. Every admitted native Goal round is persisted before the next step can pass the plugin's fence.

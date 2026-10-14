@@ -79,7 +79,7 @@ test('omits dedicated DS Bot tools and their entire subcall trees', () => {
     result('visible', 'read_file', { path: 'public.txt' }),
   ]))
 
-  assert.deepEqual(records.map(record => record.callId), ['parent', 'visible'])
+  assert.deepEqual(records.map(record => record.callId), ['visible'])
   assert.doesNotMatch(JSON.stringify(records), /private args|private child|private output/)
 })
 
@@ -193,4 +193,29 @@ test('only an open Bot request reports a reply peer, and completion clears it', 
   assert.equal(activeReplyPeer(snapshot([node])), undefined)
   node.location.turn.status = 'open'; node.data.source.kind = 'user'
   assert.equal(activeReplyPeer(snapshot([node])), undefined)
+})
+
+test('one continuous work batch spans native request headers and hidden per-step bookkeeping', () => {
+  const nodes = [toolNode(1, result('first', 'list_bots', {}))]
+  for (let step = 1; step <= 39; step++) {
+    const seq = step * 10
+    nodes.push({ key: `request:${step}`, kind: 'request-prompt', anchorSeq: seq, location: { turn: { turn: 1 } }, data: {} })
+    nodes.push({ key: `system:${step}`, kind: 'system-prompt', anchorSeq: seq + 1, visibility: 'hidden', data: {} })
+    nodes.push(assistantNode(seq + 2, [{ kind: 'reasoning', text: 'Internal check' }, { kind: 'tool-call', callId: `call:${step}` }]))
+    nodes.push(toolNode(seq + 3, result(`call:${step}`, step % 2 ? 'pwsh' : 'job_output', {})))
+  }
+  const runs = toolRuns(snapshot(nodes))
+  assert.equal([...runs.values()].filter(run => !run.hidden).length, 1)
+  assert.equal(runs.get('tool:1').records.length, 40)
+  assert.equal(new Set(runs.get('tool:1').records.map(record => record.callId)).size, 40)
+})
+
+test('a PTC card is a batch boundary and its ordinary subcalls remain unique', () => {
+  const read = result('read', 'read_file', { path: 'public.txt' })
+  const root = running('program', 'run_code', {}, [read, running('ask', 'ask_user', {}), read])
+  const cardNode = toolNode(2, root)
+  const runs = toolRuns(snapshot([toolNode(1, result('before', 'pwsh', {})), cardNode, toolNode(3, result('after', 'pwsh', {}))]))
+  assert.equal(runs.has(cardNode.key), false)
+  assert.equal(runs.get('tool:3').hidden, false)
+  assert.deepEqual(toolRecords(root).map(record => record.callId), ['read'])
 })

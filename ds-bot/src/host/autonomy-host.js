@@ -122,6 +122,8 @@ export function install(rt) {
     autonomyAbortPartMove: (...args) => invoke('abortPartMove', ...args),
     autonomyScheduleMoved: (...args) => invoke('scheduleMoved', ...args),
     autonomyOwnsRecovery: sessionId => invoke('ownsRecovery', sessionId) === true,
+    autonomyOwnsGoal: (sessionId, goalId) => !disposed && typeof sessionId === 'string' && typeof goalId === 'string'
+      && invoke('ownsGoal', sessionId, goalId) === true,
     autonomyEndpoint: (...args) => {
       if (typeof extension?.handleApi !== 'function') throw new Error('DS Bot autonomy is not available')
       return invoke('handleApi', ...args)

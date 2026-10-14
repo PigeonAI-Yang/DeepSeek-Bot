@@ -2,7 +2,7 @@
 
 This fork is [PigeonAI-Yang/DeepSeek-Bot](https://github.com/PigeonAI-Yang/DeepSeek-Bot). It keeps the Windows Desktop changes in the plugin source at `ds-bot/src/client`.
 
-The fork uses `ds-bot` package version `0.1.4`. The generated client is built from `ds-bot/src/client` with the existing `npm run build` workflow in `ds-bot/`.
+The fork uses `ds-bot` package version `0.1.6`. The generated client is built from `ds-bot/src/client` with the existing `npm run build` workflow in `ds-bot/`.
 
 ## Install this fork
 

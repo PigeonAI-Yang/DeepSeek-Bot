@@ -4,7 +4,7 @@ import { ChatsIcon, ClockIcon, MicIcon, PaperclipIcon, PeopleIcon, PlusIcon, Wav
 import { BotMark } from './mark.js'
 import { useLinger } from './motion.js'
 import { currentPart } from './text.js'
-import { PERMISSION_LABELS } from './details-drawer.js'
+import { presetName } from './permission-picker.js'
 import { ModelMenu } from './model-menu.js'
 import { t } from './i18n.js'
 
@@ -165,8 +165,7 @@ export function ComposerPermission({ sessionId, useRoster }) {
   if (!bot || !roster.ready || currentPart(bot) !== sessionId) return null
   const saved = bot.permission ?? roster.permissions?.defaultPreset
   if (saved == null) return null
-  const option = roster.permissions?.options?.find(item => item.value === saved)
-  const label = PERMISSION_LABELS[saved] ? t(PERMISSION_LABELS[saved]) : option?.name ?? saved
+  const label = presetName(saved, roster.permissions)
   return h('span', { className: 'bt-composer-permission', title: label }, label)
 }
 

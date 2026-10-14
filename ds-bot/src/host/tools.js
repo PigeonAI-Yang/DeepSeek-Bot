@@ -2,16 +2,22 @@
 // question card. Group rounds and reading chats are in groups.js.
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { COLORS, EXTRA_COLORS, MAX_HOPS, ROOM_BOT_ROUNDS, ROOM_MODES } from './constants.js'
+import { COLORS, EXTRA_COLORS, MAX_HOPS, MAX_UNATTENDED_MESSAGES, MAX_UNREAD_REQUESTS, ROOM_BOT_ROUNDS, ROOM_MODES, SOURCE_KIND } from './constants.js'
 import { unquote } from './text.js'
 
 export const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] }
 export const GROUP_REF = { type: 'string', required: true, description: 'Exact group chat name from list_bots' }
+const BLOCKING_QUESTION_TOOL = 'ask_user_question'
+// The autonomy extension carries only its own Goal across conversation parts.
+const GOAL_TOOLS = ['create_goal', 'update_goal', 'get_goal']
+const HIDDEN_TOOLS = [BLOCKING_QUESTION_TOOL, 'create_goal']
+const GOAL_REFUSAL = 'DS Bot does not run goals. Ask the Bot in a message instead.'
 const MODE_PARAM = {
   type: 'string',
   enum: ROOM_MODES,
   description: '"everyone": every member answers a plain message in turn, admin first. "admin" (the default): a plain message goes to the admin, who calls others with @Name. @mentions always choose who answers.',
 }
+const WORK_DIR_PARAM = { type: 'string', description: 'Full path of the folder to work in, where commands and file tools start. Only when the user asks for it' }
 
 export function install(rt) {
   const { ctx, state } = rt
@@ -29,6 +35,8 @@ export function install(rt) {
       `members: ${members.join(', ')}`,
       room.mode === 'admin' && room.admin ? 'plain messages go to the admin first' : 'every member replies in turn',
       room.notice ? `notice: ${room.notice.split('\n')[0].slice(0, 100)}` : '',
+      room.workDir ? `members work in ${room.workDir} here` : '',
+      room.permission ? `members work with the ${room.permission} permissions here` : '',
     ].filter(Boolean)
     return `- "${room.name}" — ${parts.join('; ')}`
   }
@@ -45,7 +53,7 @@ export function install(rt) {
       const self = rt.selfOf(exec.agent?.id)
       const lines = Object.values(state.bots).map(bot => {
         const model = bot.appliedModel ?? bot.model
-        const tags = [bot.role, model ? `model ${model}` : '', rt.isMain(bot.id) ? 'Main Bot' : '', bot.id === self ? 'you' : ''].filter(Boolean).join(', ')
+        const tags = [bot.role, model ? `model ${model}` : '', bot.workDir ? `works in ${bot.workDir}` : '', rt.isMain(bot.id) ? 'Main Bot' : '', bot.id === self ? 'you' : ''].filter(Boolean).join(', ')
         const job = bot.instructions ? ` — ${bot.instructions.split('\n')[0].slice(0, 120)}` : ''
         return `- ${bot.name}${tags ? ` (${tags})` : ''}${job}`
       })
@@ -71,6 +79,25 @@ export function install(rt) {
   const whereOf = (sessionId) => {
     const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
     return room ? `group "${room.name}"` : 'its own chat'
+  }
+  // Delivered but not read yet: no step or turn has taken them out of the inbox.
+  const unreadRequests = agent => [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+    .filter(message => message.source?.kind === SOURCE_KIND && message.source.role === 'request').length
+
+  // A tool that throws shows as failed in the chat, instead of as sent or stopped.
+  const refuse = (message) => { throw new Error(message) }
+
+  // A message a Bot sends is one hop past the turn that sends it, while a reply keeps
+  // the hop of the request it answers (turns.js): any chain, forwarded or back and
+  // forth, reaches MAX_HOPS.
+  const nextHop = (exec) => {
+    const turn = rt.live.get(exec.agent?.id)
+    return 1 + Math.max(turn?.info?.hop ?? 0, ...(turn?.joined ?? []).map(joined => joined.info?.hop ?? 0))
+  }
+  const CHAIN_TOO_LONG = 'This chain of Bot messages is already long. Stop here and report to the user instead.'
+  const checkUnattended = () => {
+    if (rt.unattended.sent < MAX_UNATTENDED_MESSAGES) return
+    refuse(`Not sent: the team has sent ${MAX_UNATTENDED_MESSAGES} Bot messages since the user last wrote. Stop messaging other Bots and tell the user what is still open.`)
   }
 
   ctx.tools.register(defineTool({
@@ -98,13 +125,19 @@ export function install(rt) {
       const target = rt.findBot(args.to)
       if (target === undefined) return `No Bot named ${args.to}. Team: ${Object.values(state.bots).map(bot => bot.name).join(', ')}`
       if (target.id === sender.id) return 'You cannot message yourself.'
-      const turn = rt.live.get(exec.agent?.id)
-      const hop = Math.max(turn?.info?.hop ?? 0, ...(turn?.joined ?? []).map(joined => joined.info?.hop ?? 0))
-      if (hop >= MAX_HOPS) return 'This chain of Bot messages is already long. Stop here and report to the user instead.'
+      const hop = nextHop(exec)
+      if (hop > MAX_HOPS) return CHAIN_TOO_LONG
+      checkUnattended()
+      const chat = rt.chatOf(target.id)
+      const unread = unreadRequests(await rt.resolveAgent(chat))
+      if (unread >= MAX_UNREAD_REQUESTS) {
+        refuse(`Not sent: ${target.name} has not read the last ${unread} messages from Bots yet, so it is most likely stuck, for example waiting for the user. Do not send it more; tell the user that ${target.name} is not responding.`)
+      }
       const toUser = args.reply_to === 'user'
-      const working = rt.live.get(rt.chatOf(target.id))?.turn !== undefined
+      const working = rt.live.get(chat)?.turn !== undefined
       const steer = args.when !== 'queue' && !toUser
       await rt.deliver({ fromId: sender.id, toId: target.id, text: args.message, role: 'request', hop, steer, ...(toUser ? { audience: 'user' } : callerRoom(exec)) })
+      rt.unattended.sent += 1
       const sent = toUser
         ? `Delivered to ${target.name}. It will answer the user in its own chat; nothing comes back to you, so point the user to ${target.name}'s chat instead of relaying.`
         : working && steer
@@ -112,17 +145,19 @@ export function install(rt) {
           : working
             ? `Queued for ${target.name}: it reads your message after its current work. Its reply will arrive later as a new message; do not wait for it.`
             : `Delivered to ${target.name}. Its reply will arrive later as a new message; do not wait for it.`
+      // "Delivered" only means it is in the inbox; say so when it may sit there a while.
+      const notes = [
+        rt.waitsForApproval?.(chat) ? `${target.name} is waiting for the user's approval, so it reads your message only after the user answers.` : '',
+        unread > 0 ? `${target.name} has not read ${unread === 1 ? 'an earlier message' : `${unread} earlier messages`} from Bots yet.` : '',
+      ].filter(Boolean)
+      const status = notes.length === 0 ? sent : `${sent} ${notes.join(' ')}`
       // Messages reach a Bot's own chat only; work in a group goes on without them.
-      const groups = activeSessions(target.id).running.filter(sessionId => sessionId !== rt.chatOf(target.id))
-      if (groups.length === 0) return sent
+      const groups = activeSessions(target.id).running.filter(sessionId => sessionId !== chat)
+      if (groups.length === 0) return status
       const stop = rt.isMain(sender.id) ? ' If it must not go on there, use stop_bot.' : ''
-      return `${sent} ${target.name} is also working in ${groups.map(whereOf).join(' and ')}; your message does not reach that work.${stop}`
+      return `${status} ${target.name} is also working in ${groups.map(whereOf).join(' and ')}; your message does not reach that work.${stop}`
     },
   }))
-
-  // stop_bot throws when it does nothing, so the chat shows the call as failed
-  // instead of "Stopped".
-  const refuse = (message) => { throw new Error(message) }
 
   ctx.tools.register(defineTool({
     name: 'stop_bot',
@@ -160,15 +195,24 @@ export function install(rt) {
       role: { type: 'string', required: true, description: 'Two-to-four character role label shown under the name' },
       instructions: { type: 'string', required: true, description: 'What this Bot is responsible for and how it should work' },
       brief: { type: 'string', description: 'Why the user wants it, passed to the new Bot as its first context' },
-      model: { type: 'string', description: 'Model the Bot runs on, as provider/model or a model id. Only when the user names one; otherwise the DSH default model.' },
+      model: { type: 'string', description: 'Model the Bot runs on, as provider/model or a model id. Only when the user names one; otherwise the model you run on.' },
+      work_dir: WORK_DIR_PARAM,
     },
     output,
     async execute(args, exec) {
       await rt.load()
       if (!rt.isMain(rt.selfOf(exec.agent?.id))) return 'Only the Main Bot can create Bots. Ask the Main Bot instead.'
       try {
-        const bot = await rt.createBot({ ...args, createdBy: rt.selfOf(exec.agent.id) })
-        return `Created ${bot.name}. It is greeting the user now.`
+        const workDir = args.work_dir ? await rt.cleanWorkDir(args.work_dir) : undefined
+        const name = String(args.name ?? '').trim()
+        await rt.approveFolder(exec, { path: workDir, who: { en: `the new Bot ${name}`, zh: `新 Bot ${name} ` } })
+        // Without a named model the new Bot takes its creator's: the DSH default may be
+        // a provider that has no key, and then the new Bot fails on its first reply.
+        const creator = callerBot(exec)
+        const served = creator?.model && (await rt.catalog()).some(entry => entry.ref === creator.model)
+        const model = args.model || (served ? creator.model : undefined)
+        const bot = await rt.createBot({ ...args, model, workDir, createdBy: creator?.id })
+        return `Created ${bot.name}${workDir ? `, working in ${workDir}` : ''}. It is greeting the user now.`
       } catch (error) {
         return `Could not create the Bot: ${error.message}`
       }
@@ -177,7 +221,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'update_bot',
-    description: 'Change a Bot\'s name, role, color, model, or instructions. Every Bot may change itself; only a Main Bot may change another Bot.',
+    description: 'Change a Bot\'s name, role, color, model, working folder, or instructions. Every Bot may change itself; only a Main Bot may change another Bot.',
     parameters: {
       bot: { type: 'string', description: 'Current name of the Bot to change; leave out to change yourself' },
       name: { type: 'string', description: 'New name' },
@@ -185,6 +229,7 @@ export function install(rt) {
       instructions: { type: 'string', description: 'Replacement instructions' },
       color: { type: 'string', description: `One of ${[...COLORS, ...EXTRA_COLORS].join(', ')}` },
       model: { type: 'string', description: 'Move the Bot to another model, as provider/model or a model id' },
+      work_dir: { ...WORK_DIR_PARAM, description: `${WORK_DIR_PARAM.description}; an empty string returns it to the team workspace` },
     },
     output,
     async execute(args, exec) {
@@ -197,8 +242,13 @@ export function install(rt) {
       if (bot.id !== caller.id && !rt.isMain(self)) return 'Only a Main Bot can change another Bot. Leave out bot to change yourself, or ask a Main Bot with message_bot.'
       try {
         const { name: newName, role, instructions, color, model } = args
-        const next = await rt.updateBot(bot.id, { name: newName, role, instructions, color, ...(model ? { model } : {}) })
-        return `Updated ${next.name}.`
+        const moving = typeof args.work_dir === 'string'
+        const workDir = moving ? await rt.cleanWorkDir(args.work_dir) : undefined
+        if (moving && workDir !== bot.workDir) await rt.approveFolder(exec, { path: workDir, sessions: rt.sessionsOfBot(bot.id), who: { en: bot.name, zh: ` ${bot.name} ` } })
+        const next = await rt.updateBot(bot.id, { name: newName, role, instructions, color, ...(model ? { model } : {}), ...(moving ? { workDir: workDir ?? '' } : {}) })
+        if (!moving) return `Updated ${next.name}.`
+        const folder = workDir ?? 'the team workspace'
+        return bot.id === caller.id ? `Updated ${next.name}. From your next step on, you work in ${folder}.` : `Updated ${next.name}. It now works in ${folder}.`
       } catch (error) {
         return `Could not update the Bot: ${error.message}`
       }
@@ -281,6 +331,7 @@ export function install(rt) {
       remove_members: { type: 'array', items: { type: 'string' }, description: 'Exact names of Bots to remove' },
       admin: { type: 'string', description: 'Member to make the admin; "none" leaves the group without one (Main Bots only)' },
       mode: MODE_PARAM,
+      work_dir: { ...WORK_DIR_PARAM, description: `${WORK_DIR_PARAM.description}. Every member works there in this group; an empty string lets each member work in its own folder again (Main Bots only)` },
     },
     output,
     async execute(args, exec) {
@@ -289,6 +340,8 @@ export function install(rt) {
       if (rt.botOf(self) === undefined) return 'Only Bots on the team can use update_group.'
       const { room, error } = pickRoom(args.group, self)
       if (error) return error
+      const moving = typeof args.work_dir === 'string'
+      if (moving && !rt.isMain(self)) return `Only a Main Bot can set the folder of "${room.name}".`
       const add = resolveBots(args.add_members)
       const remove = resolveBots(args.remove_members)
       const unknown = [...add.unknown, ...remove.unknown]
@@ -302,6 +355,16 @@ export function install(rt) {
         }
       }
       try {
+        const workDir = moving ? await rt.cleanWorkDir(args.work_dir) : undefined
+        // A Bot that joins a group with a folder works there from its first turn.
+        const joining = add.bots.filter(bot => !room.members.includes(bot.id))
+        if (moving && workDir !== room.workDir) {
+          const members = [...room.members, ...joining.map(bot => bot.id)]
+          await rt.approveFolder(exec, { path: workDir, sessions: members.map(id => room.sessions?.[id]).filter(Boolean), who: { en: `every member of "${room.name}"`, zh: `群聊「${room.name}」的成员` } })
+        } else if (joining.length > 0) {
+          const names = joining.map(bot => bot.name)
+          await rt.approveFolder(exec, { path: room.workDir, sessions: joining.map(bot => room.sessions?.[bot.id]).filter(Boolean), who: { en: names.join(', '), zh: ` ${names.join('、')} ` } })
+        }
         const { room: next, changes } = await rt.updateRoom(room.id, {
           name: args.name,
           notice: args.notice,
@@ -309,6 +372,7 @@ export function install(rt) {
           admin,
           add: add.bots.map(bot => bot.id),
           remove: remove.bots.map(bot => bot.id),
+          ...(moving ? { workDir: workDir ?? '' } : {}),
         }, self)
         return changes.length === 0 ? `Nothing changed in "${next.name}".` : `Updated "${next.name}": ${changes.join('; ')}.`
       } catch (failure) {
@@ -353,18 +417,21 @@ export function install(rt) {
       if (!rt.isMain(self) && !rt.isAdminOf(room, self)) return `Only a Main Bot or the admin of "${room.name}" can post there. Use message_bot to reach its members.`
       const info = rt.live.get(exec.agent?.id)?.info
       if (info?.role === 'room' && info.roomId === room.id) return `You are speaking in "${room.name}" right now. Write your message as your reply instead.`
-      if ((info?.hop ?? 0) >= MAX_HOPS) return 'This chain of Bot messages is already long. Stop here and report to the user instead.'
+      const hop = nextHop(exec)
+      if (hop > MAX_HOPS) return CHAIN_TOO_LONG
       const text = String(args.message ?? '').trim()
       if (text === '') return 'Write a message to post.'
       if ((room.botRounds ?? 0) >= ROOM_BOT_ROUNDS) return `Bots already started ${ROOM_BOT_ROUNDS} rounds in "${room.name}" since the user last spoke there. Wait for the user.`
+      checkUnattended()
       room.botRounds = (room.botRounds ?? 0) + 1
       await rt.save()
       const reportBack = args.report_back === true
       try {
-        await rt.postToRoom(room, sender, text, { hop: info?.hop ?? 0, ...(reportBack ? { reportBack: true } : {}) })
+        await rt.postToRoom(room, sender, text, { hop, ...(reportBack ? { reportBack: true } : {}) })
       } catch (failure) {
         return `Could not post in "${room.name}": ${failure.message}`
       }
+      rt.unattended.sent += 1
       return `Posted in "${room.name}". Members reply there, where the user reads them${reportBack ? '; their replies also come back to you as a new message when the round ends' : ', and nothing comes back to you'}.`
     },
   }))
@@ -427,6 +494,77 @@ export function install(rt) {
     },
   }))
 
+  // dsh's own question tool holds the turn open until the user answers, and every
+  // message from another Bot or a group round queues behind it. Bot Sessions ask
+  // through ask_user instead. Goal creation belongs to the autonomy extension;
+  // reads and updates stay subject to its exact ownership and native authorization.
+  const hiddenTools = new WeakSet()
+  const hideBotUnusedTools = (agent) => {
+    if (agent === undefined || hiddenTools.has(agent) || !rt.isBotSession(agent.session?.id)) return
+    if (typeof agent.ctx?.tools?.restrict !== 'function') return
+    try {
+      // restrict() throws on a name this profile does not serve.
+      const served = new Set(ctx.tools.schemas(agent).map(schema => schema.name))
+      const deny = HIDDEN_TOOLS.filter(name => served.has(name))
+      if (deny.length === 0) return
+      agent.ctx.tools.restrict({ deny })
+      hiddenTools.add(agent)
+    } catch (error) {
+      rt.warn('ds-bot: %s stay in the tool list of %s: %s', HIDDEN_TOOLS.join(', '), agent.session?.id, error)
+    }
+  }
+  // A new Bot, part, or group Session gets its Agent before ds-bot records it, so the
+  // list is only trimmed once ds-bot resolves that Agent again; meanwhile the guard
+  // refuses the question tool in any Bot Session, and a goal made there is blocked.
+  ctx.tools.guard(exec => {
+    if (!rt.isBotSession(exec.agent?.id)) return undefined
+    if (exec.name === BLOCKING_QUESTION_TOOL) return `Bots cannot use ${BLOCKING_QUESTION_TOOL}. Ask with ask_user in your own chat, or ask in your reply.`
+    if (!GOAL_TOOLS.includes(exec.name)) return undefined
+    const goal = goals?.get(exec.agent)
+    return exec.name !== 'create_goal' && goal && rt.autonomyOwnsGoal?.(exec.agent.id, goal.id) === true
+      ? undefined : GOAL_REFUSAL
+  })
+  // Creation waits for this listener, so the Agent's first step already lacks the tool.
+  ctx.on('agent/created', async ({ agent }) => {
+    try {
+      await rt.load()
+      hideBotUnusedTools(agent)
+    } catch (error) {
+      rt.warn('ds-bot: hiding %s on agent/created failed: %s', HIDDEN_TOOLS.join(', '), error)
+    }
+  })
+
+  // The /goal command stays open in every Session, so a goal started in a Bot chat or a
+  // group is blocked at once; DSH's round driver then starts no round for it.
+  let goals = null
+  const attachGoals = (sub) => {
+    const own = sub.goals
+    goals = own
+    sub.effect(() => () => { if (goals === own) goals = null }, 'ds-bot: goal service')
+  }
+  if (typeof ctx.inject === 'function') ctx.inject(['goals'], attachGoals)
+  else if (ctx.get?.('goals') !== undefined) attachGoals({ goals: ctx.get('goals'), effect: (execute, label) => ctx.effect(execute, label) })
+  const blockGoal = async (sessionId) => {
+    const service = goals
+    if (service === null) return
+    try {
+      const agent = await rt.resolveAgent(sessionId)
+      const goal = service.get(agent)
+      if (goal?.phase !== 'active') return
+      if (rt.autonomyOwnsGoal?.(sessionId, goal.id) === true) return
+      service.block(agent, { id: goal.id, revision: goal.revision }, { code: 'not-supported', message: GOAL_REFUSAL })
+    } catch (error) {
+      rt.warn('ds-bot: blocking the goal in %s failed: %s', sessionId, error)
+    }
+  }
+  ctx.on('session/event', (session, event) => {
+    if (event.type !== 'goal/change' || event.data?.goal?.phase !== 'active') return
+    const id = session?.id
+    if (!rt.isBotSession(id) && rt.roomOf(id) === undefined) return
+    // block() appends to the same log, so it waits until every listener has seen this change.
+    setTimeout(() => void blockGoal(id), 0)
+  })
+
   ctx.tools.register(defineTool({
     name: 'list_capabilities',
     description: 'List shared MCP servers, skills, and packs, plus the capabilities attached to you.',
@@ -462,7 +600,7 @@ export function install(rt) {
       command: { type: 'string', description: 'Program that starts a local MCP server' },
       args: { type: 'array', items: { type: 'string' }, description: 'Arguments for command' },
       env: { type: 'object', additionalProperties: true, description: 'Environment variables for command; write $DSH_SECRET_<NAME> to insert a saved secret instead of the value' },
-      url: { type: 'string', description: 'MCP server URL' },
+      url: { type: 'string', description: 'MCP server URL; write $DSH_SECRET_<NAME> in the path or query to insert a saved secret, URL-encoded. Prefer headers for keys' },
       headers: { type: 'object', additionalProperties: true, description: 'HTTP headers; write $DSH_SECRET_<NAME> to insert a saved secret instead of the value' },
       content: { type: 'string', description: 'Skill instructions' },
       items: { type: 'array', items: { type: 'string' }, description: 'MCP server and skill names in the pack' },
@@ -525,5 +663,5 @@ export function install(rt) {
     }))
   }
 
-  Object.assign(rt, { pickRoom })
+  Object.assign(rt, { pickRoom, hideBotUnusedTools })
 }

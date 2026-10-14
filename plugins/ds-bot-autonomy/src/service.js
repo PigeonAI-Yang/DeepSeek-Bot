@@ -223,6 +223,7 @@ export function createAutonomyService(ctx, services) {
     const runtime = bySession.get(item.target.sessionId)
     if (runtime?.workItemId === id) {
       runtime.ready = false
+      runtime.ownedGoalId = undefined
       goals.disarm(runtime.agent)
     }
   }
@@ -283,6 +284,7 @@ export function createAutonomyService(ctx, services) {
     let goal
     let releaseBinding
     runtime.binding = new Promise(resolve => { releaseBinding = resolve })
+    runtime.ownedGoalId = undefined
     try {
       if (resume && currentGoal !== undefined && item.goalRef !== undefined && currentGoal.phase !== 'complete') {
         goal = goals.resume(agent, { id: currentGoal.id, revision: currentGoal.revision })
@@ -295,6 +297,7 @@ export function createAutonomyService(ctx, services) {
         }
         goal = goals.create(agent, { objective: workPrompt(item), maxGoalRounds: remaining })
       }
+      runtime.ownedGoalId = goal.id
       if (transferWaitReason === 'question' || transferWaitReason === 'dependency') {
         goal = goals.block(agent, { id: goal.id, revision: goal.revision }, {
           code: transferWaitReason === 'question' ? 'needs-user-input' : 'waiting-for-dependency',
@@ -319,6 +322,7 @@ export function createAutonomyService(ctx, services) {
       })
       if (bound === undefined || stoppedWorkIds.has(id)) {
         runtime.ready = false
+        runtime.ownedGoalId = undefined
         goals.disarm(agent)
         return
       }
@@ -335,6 +339,7 @@ export function createAutonomyService(ctx, services) {
 
     } catch (error) {
       runtime.ready = false
+      runtime.ownedGoalId = undefined
       goals.disarm(agent)
       await serial(id, async () => {
         const latest = store.workItems.get(id)
@@ -816,6 +821,21 @@ export function createAutonomyService(ctx, services) {
     return [...store.workItems.entries()].some(([, item]) => item.target.sessionId === sessionId && OWNER_ACTIVE.has(item.status))
   }
 
+  function ownsGoal(sessionId, goalId) {
+    if (!accepting || disposed || !host.writable() || store === undefined) return false
+    const runtime = bySession.get(sessionId)
+    const item = runtime && store.workItems.get(runtime.workItemId)
+    if (!item || !['activating', 'active', 'waiting'].includes(item.status) || stoppedWorkIds.has(item.id)
+      || item.stopGeneration !== runtime.generation || item.target.sessionId !== sessionId
+      || agents.get(sessionId) !== runtime.agent || runtime.agent.session?.id !== sessionId
+      || runtime.ownedGoalId !== goalId) return false
+    try {
+      const goal = goals.get(runtime.agent)
+      return host.target(item.target.botId, item.target.roomId).sessionId === sessionId
+        && goal?.id === goalId && goal.phase !== 'complete'
+    } catch { return false }
+  }
+
   async function deliverFinal(item) {
     return serial(item.id, async () => {
       const current = store.workItems.get(item.id)
@@ -872,8 +892,10 @@ export function createAutonomyService(ctx, services) {
       let resumed
       try {
         resumed = goals.resume(agent, { id: goal.id, revision: goal.revision })
+        runtime.ownedGoalId = resumed.id
         await updateWork(item.id, { goalRef: { id: resumed.id, revision: resumed.revision } })
       } catch (error) {
+        runtime.ownedGoalId = undefined
         goals.disarm(agent)
         if (!stoppedWorkIds.has(item.id)) await updateWork(item.id, { status: 'waiting', waitReason: waitReason ?? current.waitReason ?? 'resume-failed', evidence: appendEvidence(current.evidence, `Resume failed: ${String(error?.message ?? error)}`) })
         return
@@ -1047,6 +1069,7 @@ export function createAutonomyService(ctx, services) {
   }
 
   function onGoalChange(sessionId, event) {
+    if (!accepting || disposed) return
     const data = event.data
     const goal = data?.goal
     const goalId = goal?.id ?? data?.cleared?.id
@@ -1478,6 +1501,7 @@ export function createAutonomyService(ctx, services) {
     abortPartMove,
     scheduleMoved,
     ownsRecovery,
+    ownsGoal,
     handleApi,
   }
   const api = Object.freeze({

@@ -57,7 +57,7 @@ function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, useToolS
   const memberActivities = busy.map(member => ({
     id: member.id,
     entry: {
-      label: `${member.bot.name} · ${member.state === 'ask' ? t('Waiting for your approval') : workPhrase(member.doing?.tool)}`,
+      label: `${member.bot.name} · ${member.state === 'ask' ? t('Waiting for your approval') : workPhrase(member.doing)}`,
       at: member.state === 'ask' ? member.approvals[0]?.at : member.doing?.since,
     },
   }))

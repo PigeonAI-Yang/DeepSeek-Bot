@@ -8,6 +8,8 @@ const PRIVATE_TOOLS = new Set([
   'ask_user_question', 'read_group_chat', 'remember', 'forget',
 ])
 const PRIVATE_KEY = /token|key|password|secret|authorization/i
+const hasDedicatedCall = call => call && (PRIVATE_TOOLS.has(toolName(call)) || (call.subCalls ?? []).some(hasDedicatedCall))
+const INTERNAL_KINDS = new Set(['request-prompt', 'system-prompt', 'system-message', 'turn-process'])
 
 function safeValue(value) {
   if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value
@@ -69,16 +71,20 @@ function imageCallIds(root) {
 export function toolRecords(root) {
   const records = []
   const callsWithImages = imageCallIds(root)
+  const seen = new Set()
 
   const visit = (call, path) => {
     if (!call || typeof call !== 'object') return
+    const identity = call.callId ?? call
+    if (seen.has(identity)) return
+    seen.add(identity)
     const rawName = toolName(call)
     const name = typeof rawName === 'string' && rawName ? rawName : undefined
     if (name && PRIVATE_TOOLS.has(name)) return
 
     const callId = typeof call.callId === 'string' && call.callId ? call.callId : undefined
     const shaped = name !== undefined || callId !== undefined || call.kind === 'tool-result' || typeof call.phase === 'string'
-    if (shaped) {
+    if (shaped && !((name === 'run_code' || name === undefined) && hasDedicatedCall(call))) {
       const status = statusOf(call)
       const imageAlreadyShown = name === 'read_image' && status === 'completed' && callId && callsWithImages.has(callId)
       if (!imageAlreadyShown) {
@@ -128,12 +134,13 @@ export function toolRuns(snapshot) {
     pending = []
   }
   for (const node of nodes) {
+    if (INTERNAL_KINDS.has(node.kind) || (node.visibility === 'hidden' && !['tool-call', 'turn-trigger', 'steering'].includes(node.kind))) continue
     const nextTurn = node.location?.turn?.turn ?? node.data?.turn ?? node.data?.root?.turn
     if (nextTurn !== turn) flush()
     turn = nextTurn
     const blocks = node.data?.blocks ?? []
     if (node.kind === 'assistant-step' && blocks.every(block => block.kind === 'reasoning' || block.kind === 'tool-call' || (block.kind === 'text' && !block.text.trim()))) continue
-    if (node.kind === 'tool-call' && nextTurn !== undefined && !imageInspections(node.data.root).length) {
+    if (node.kind === 'tool-call' && nextTurn !== undefined && !hasDedicatedCall(node.data.root) && !imageInspections(node.data.root).length) {
       const records = toolRecords(node.data.root)
       if (records.length) {
         pending.push({ node, records })

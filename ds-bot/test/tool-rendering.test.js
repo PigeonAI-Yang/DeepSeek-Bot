@@ -79,13 +79,14 @@ test('completed Bot exchange gets a clickable reply event using durable trigger 
   const peer = { id: 'peer', name: 'Other Bot' }
   const node = { data: { turn: 10, time: 1000, closing: { status: 'settled' } }, location: { turn: { end: { data: { reason: { kind: 'completed' } } } } } }
   let opened
-  const props = { node, sessionId: 'bot', useRoster: select => select({ byId: { bot: { id: 'bot' }, peer }, roomsById: {}, exchangeTurns: { bot: [10] } }), useTurnSteps: () => [], useTurnTriggers: () => [{ source: { kind: 'bot', senderSessionId: 'peer' } }], useTurnClock: select => select({}), useUi: select => select({}), actions: { openExchange: (...args) => { opened = args }, noteTurnTime: () => {} } }
+  const turn = { turn: 10, end: { time: 1000, data: { reason: { kind: 'completed' } } } }
+  const props = { turn, sessionId: 'bot', useRoster: select => select({ byId: { bot: { id: 'bot' }, peer }, roomsById: {}, exchangeTurns: { bot: [10] } }), useTurnSteps: () => [node.data.closing], useTurnTriggers: () => [{ source: { kind: 'bot', senderSessionId: 'peer' } }], useTurnClock: select => select({}), useUi: select => select({}), actions: { openExchange: (...args) => { opened = args }, noteTurnTime: () => {} } }
   const tree = TurnTailCell(props)
   const event = tree.props.children.find(child => child?.type?.name === 'EventLine')
   assert.equal(event.props.bots[0], peer)
   event.props.onOpen(peer)
   assert.deepEqual(opened, ['bot', 'peer'])
-  assert.equal(TurnTailCell({ ...props, node: { ...node, location: { turn: { end: { data: { reason: { kind: 'interrupted' } } } } } } }), null)
+  assert.equal(TurnTailCell({ ...props, turn: { ...turn, end: { time: 1000, data: { reason: { kind: 'interrupted' } } } } }), null)
 })
 
 test('runtime activity retains the exact tool, object and authoritative start time', () => {

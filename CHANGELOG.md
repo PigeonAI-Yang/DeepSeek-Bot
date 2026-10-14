@@ -4,6 +4,51 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-15
+
+### Added
+
+- **Group permissions**: a group chat can run all its members with one permission preset (Read only, Workspace or Full access) in place of each member's own. Turn on **Same for every member** under Permissions in the group's settings; the group's details show the preset while it is on. Members' conversations in the group change at once, and a member's later conversations there start on it. Turned off, each member works with its own preset again.
+
+### Changed
+
+- A Bot at work in a group chat no longer stays silent until it is done: it says what it will do, keeps the group posted as it goes, and ends with the result.
+- The work status in the group, the sidebar and a Bot's own chat says what the Bot is doing, instead of only "On it", also while it moves to a fresh conversation.
+
+### Fixed
+
+- In a group chat, what a Bot did after one of its background jobs finished, or after it moved to a fresh conversation, never reached the group. It now does.
+- Bots could keep messaging each other for a long time without you, for example by forwarding a request from Bot to Bot or through group posts. Every forwarded message and group post now counts toward the limit on how long a chain of Bot messages can get, and after 40 Bot messages since you last wrote, answered a question card or a scheduled task ran, `message_bot` and `post_to_group` fail and tell the Bot to report to you. Bots are also told not to send thanks or acknowledgements, and not to answer a reply. ([#129](https://github.com/Fei2411/DeepSeek-Bot/issues/129))
+- An HTTP MCP capability with `$DSH_SECRET_<NAME>` in its URL sent the reference itself to the server and showed ready until the first tool call failed. The URL now gets the secret's value, URL-encoded, and a capability whose Bot may not use the secret shows an error. ([#125](https://github.com/Fei2411/DeepSeek-Bot/issues/125))
+- Group chats now relay messages to their Bots with the `ptc` agent preset, DSH Desktop's default. New Bot chats, group chats and conversation parts use the `standard` preset. A group chat made under `ptc` still relays, but each of its rounds is limited by DSH's time limit for a program run, about 10 minutes. ([#37](https://github.com/Fei2411/DeepSeek-Bot/issues/37))
+- Bot chats and group chats no longer run DeepSeek Harness goals. A goal started there with `/goal` is stopped at once with a short note, so a group chat no longer runs round after round, and the chat shows no goal rounds. ([#133](https://github.com/Fei2411/DeepSeek-Bot/issues/133))
+- With a plugin that re-skins DSH's composer or sidebar installed alongside, such as `@michengai/dsh-codex-ui`, a Bot chat's message box keeps its one-line height, its button spacing and its "Message <Bot>" placeholder, and the sidebar footer keeps the account button and Connect plugins on one row. ([#127](https://github.com/Fei2411/DeepSeek-Bot/issues/127))
+- Opening and closing the details panel no longer stutters in a long chat, most of all in a group chat. On every frame of the glide the whole conversation was styled again, because of a width that DSH writes on the conversation at every resize and that Bot chats do not use. The conversation still glides with the panel, and each frame now restyles only what changes.
+- In a group chat, each member at work had a row of its own above the message box, which ran over the messages behind it. One capsule above the message box now says who waits for your approval and who is at work, and opens the group's details. A Bot's own chat shows the groups it works in the same way.
+- A group's details panel no longer puts badges on the members' marks or a member's work on a loose line under its row. Each member has one row with its mark, name, Admin tag and what it is doing, Stop beside it while it works in the group, and the approvals it waits on below. The group shows its first members side by side, and the tab row that only held Details is gone.
+
+## [0.1.5] - 2026-10-13
+
+### Added
+
+- **Working folder**: a Bot can work directly in a folder you choose instead of the team workspace. Set it in the Bot's settings or details panel: type a path, pick one of your DSH projects, or browse. A group chat can set one folder for all its members there. You can also ask a Bot to change its own folder, or a Main Bot to change any Bot's or group's folder. A Bot that sets a folder outside the team workspace, or adds a Bot to a group that works in one, asks for your approval first when those Bots can only write in their folder. After a change, the Bot's chat goes on in a fresh part that starts in the new folder.
+
+### Fixed
+
+- A new Bot asks where to start in its first reply instead of on a question card, and follows its own instructions where they say otherwise.
+- Bots no longer use DeepSeek Harness's own question card, which held the Bot until you answered it while messages from other Bots waited.
+- A Bot that messaged a Bot stuck on earlier work was told "Delivered" every time, with no sign that nothing was read. It is now told how many earlier messages wait unread and when the other Bot waits for your approval, and after 10 unread messages `message_bot` fails and tells it to report the stuck Bot to you.
+- On model providers that need every request to name its conversation, such as OpenCode Go, the memory panel, automatic memory updates, the context check of long chats and image reading for text-only models failed. They now work there too.
+- The memory panel's summary, its "ask or update" and the memory review no longer stop when the Bot's model refuses the call or runs out of output budget: they try once more on the profile's default model. After you change the Bot's model, a failed summary is written again automatically. ([#116](https://github.com/Fei2411/DeepSeek-Bot/issues/116))
+- With the `ptc` agent preset, the team view and a Bot's character show the tool the Bot runs from its code, an approval card says what that tool does, and a question card asked from code is kept in chat search and in the next part of the chat. In a group chat, a member that only reads the chat or checks the team no longer leaves the round as if it had gone off to work.
+- Switching from Bot mode back to Agent mode no longer leaves parts of the Bot interface on screen, such as the chat header or Bot messages without their styles, when one part fails to close. The other parts still close, and Bot mode opens normally again.
+- DS Bot no longer sets DeepSeek Harness's work-details mode (Settings → General) to the most detailed one, and no longer hides that setting. Bot chats stay flat in every mode, and your choice applies again outside them. If you had chosen another mode before, choose it again once: DS Bot cannot tell which one it was.
+- Your own messages in a Bot chat stay readable under dark skins that recolor message bubbles.
+- A Bot chat now shows the cards of the files a Bot hands over with DeepSeek Harness's `present` tool, and of the files a turn changed, as DSH's own chat does. A file path in the reply links to the file when the turn made or delivered it.
+- With the `ptc` agent preset, the chat shows the tools a Bot runs from its code again: group replies, question and key cards, and the lines for messages, Bots, groups and memory.
+- A question or key card whose call is not on screen, such as one asked in an earlier part of the chat or in a Bot-to-Bot turn, waits above the message box. A card shows in one place only.
+- With `DSH_HOME` empty or starting with `~`, DS Bot now keeps its data in `bot/` inside the folder dsh uses. Before, it used a folder relative to the one dsh was started in; to keep a team made that way, close dsh and move that `bot/` folder into dsh's folder.
+
 ## [0.1.4] - 2026-10-13
 
 ### Added
@@ -124,7 +169,9 @@ If you used the legacy `dsh-bot` package, remove it before you install `ds-bot`.
 - Only one DSH can change a team at a time; a second DSH on the same DSH home opens it read-only ([Data and backups](ds-bot/README.md#data-and-backups)).
 - Group chats use many tokens: each member reads the group and answers in turn.
 
-[Unreleased]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.1...v0.1.2
