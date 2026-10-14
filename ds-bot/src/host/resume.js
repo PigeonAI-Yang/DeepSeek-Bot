@@ -137,7 +137,8 @@ export function install(rt) {
       case 'turn/start': {
         const owner = rt.groupOwners.get(id)
         const botId = owner?.botId ?? rt.chatOwners.get(id)
-        update(id, () => ({ botId, ...(owner ? { roomId: owner.roomId } : {}), since: event.time ?? Date.now() }))
+        const managedAutonomy = rt.autonomyOwnsRecovery?.(id) === true
+        update(id, () => ({ botId, ...(owner ? { roomId: owner.roomId } : {}), since: event.time ?? Date.now(), ...(managedAutonomy ? { managedAutonomy: true } : {}) }))
         break
       }
       case 'user/message': {
@@ -163,6 +164,7 @@ export function install(rt) {
     : approval === undefined ? (({ approval: _, ...rest }) => rest)(record) : { ...record, approval }))
 
   async function resumeTurn(sessionId, record) {
+    if (record.managedAutonomy === true) return
     const bot = rt.botOf(record.botId)
     if (bot === undefined) return
     const text = resumeText(record)

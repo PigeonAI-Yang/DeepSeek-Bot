@@ -80,7 +80,7 @@ export function install(rt) {
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer'])
+  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'autonomy-list', 'autonomy-get'])
 
   function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -245,6 +245,15 @@ export function install(rt) {
         case 'memory-forget':
           await rt.load()
           return ok(await rt.memoryEndpoint(endpoint, body))
+        case 'autonomy-list':
+        case 'autonomy-get':
+        case 'autonomy-submit':
+        case 'autonomy-stop':
+        case 'autonomy-resume':
+        case 'autonomy-responsibilities':
+          await rt.load()
+          if (typeof rt.autonomyEndpoint !== 'function') throw invalid('DS Bot autonomy is not available')
+          return ok(await rt.autonomyEndpoint(endpoint, body))
         case 'answer-question': {
           if (typeof body.sessionId !== 'string') return fail('Nothing to send', 'bot/invalid')
           await rt.load()
@@ -254,6 +263,7 @@ export function install(rt) {
           if (question === undefined || question.id !== body.questionId) return fail('This question is no longer open', 'bot/stale')
           const reply = questionReply(question, body.answer)
           if (reply === undefined) return fail('Nothing to send', 'bot/invalid')
+          await rt.autonomyQuestionAnswered?.(sessionId, question, body.answer)
           // Claim the question before queueing so a second answer is refused.
           delete state.questions[sessionId]
           try {

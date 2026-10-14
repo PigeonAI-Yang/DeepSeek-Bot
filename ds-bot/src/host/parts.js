@@ -646,6 +646,7 @@ export function install(rt) {
     for (const message of messages) {
       const copy = createUserMessage({ content: message.content, ...(message.source ? { source: message.source } : {}) })
       const kind = message.source?.kind
+      if (kind === 'goal') continue
       if (kind === 'user' || kind === SOURCE_KIND || kind === REPLY_KIND) agent.followup(copy)
       else agent.inject(copy)
     }
@@ -706,6 +707,20 @@ export function install(rt) {
     const bot = rt.botOf(job.botId)
     const room = rt.roomOf(job.roomId)
     if (bot === undefined || (job.roomId !== undefined && room === undefined)) return
+    const autonomyMove = await rt.autonomyBeginPartMove?.({ botId: bot.id, ...(room ? { roomId: room.id } : {}), fromSessionId: agent.id })
+    try {
+      await moveOnPrepared(agent, job, signal, bot, room, autonomyMove)
+      if (autonomyMove !== undefined && job.moved !== true) await rt.autonomyAbortPartMove?.(autonomyMove, { botId: bot.id, ...(room ? { roomId: room.id } : {}), fromSessionId: agent.id })
+    } catch (error) {
+      if (autonomyMove !== undefined) {
+        await rt.autonomyAbortPartMove?.(autonomyMove, { botId: bot.id, ...(room ? { roomId: room.id } : {}), fromSessionId: agent.id })
+          .catch(abortError => rt.warn('ds-bot: autonomy transfer for %s could not roll back: %s', bot.name, abortError))
+      }
+      throw error
+    }
+  }
+
+  async function moveOnPrepared(agent, job, signal, bot, room, autonomyMove) {
     const session = agent.session
     const tokens = tokensOf(session)
     const lines = await contextLines(session).catch(() => undefined)
@@ -766,19 +781,22 @@ export function install(rt) {
     }
     await rt.save()
     if (job.failed !== undefined) rescued.set(freshId, job.bare ? 'bare' : 'carried')
-    void rt.moveSchedules(agent.id, freshId)
+    await rt.moveSchedules(agent.id, freshId)
     job.moved = true
     const resume = job.resume || job.overflow
     const text = handoffPackage({ room, segment, lines: carried, number: number + 1, resume, overflow: job.overflow, failed: job.failed, bare: job.bare })
     freshParts.set(freshId, estimateTokens(text))
     await rt.ensureCapabilities(freshId)
     const fresh = await rt.resolveAgent(freshId)
-    fresh.followup(createUserMessage({ content: [{ type: 'text', text }], source: handoffSource(job, resume) }))
+    const handoff = createUserMessage({ content: [{ type: 'text', text }], source: handoffSource(job, resume) })
+    if (autonomyMove !== undefined) fresh.session.append('user/message', handoff, { surfaceOp: 'append' })
+    else fresh.followup(handoff)
     await ctx.sessions.flush(fresh.session)
     // Then what the old part held: the stopped turn's input, then whatever waited.
     const held = [...agent.inbox.nextStep, ...agent.inbox.nextTurn]
     for (const message of held) agent.inbox.remove(message.id)
-    await forward(job, [...job.carry.splice(0), ...held])
+    await forward(job, [...job.carry.splice(0), ...held].filter(message => message.source?.kind !== 'goal'))
+    await rt.autonomyFinishPartMove?.(autonomyMove, { botId: bot.id, ...(room ? { roomId: room.id } : {}), fromSessionId: agent.id, toSessionId: freshId })
     ctx.logger.info('ds-bot: %s%s moved on to part %d at %d tokens (check line %d, hard line %d); %s; %d latest and %d earlier messages carried', bot.name, room ? ` in ${room.name}` : '', number + 1, tokens ?? -1, lines?.check ?? -1, lines?.hard ?? -1,
       written !== undefined ? `note written in ${written.attempts} attempt(s)` : `note put together by DS Bot (${noted.fallback}${noted.note ? `, carries part ${noted.noteFrom}'s` : ', nothing to carry'})`,
       carried.recent.length, carried.earlier.length)

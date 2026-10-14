@@ -1,0 +1,47 @@
+{
+  "name": "ds-bot-autonomy",
+  "version": "0.1.0",
+  "description": "Keep assigned work moving with persistent tasks, Goal continuation, Bot coordination, and scheduled responsibilities.",
+  "type": "module",
+  "main": "index.js",
+  "keywords": [
+    "dsh-plugin"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*": "./locale/*",
+    "./client": "./client.js"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "locale/*.json",
+    "src/",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-agent": "*",
+    "@deepseek-ai/dsh-goal": "*",
+    "@deepseek-ai/dsh-schedule": "*",
+    "@deepseek-ai/dsh-storage-domain": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "zod": "*"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-schedule": {
+      "optional": true
+    }
+  }
+}

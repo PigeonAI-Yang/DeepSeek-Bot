@@ -138,10 +138,18 @@ export function install(rt) {
     for (const record of records) {
       const request = requestOf(record)
       if (request === null || (request.at !== undefined && Date.parse(request.at) <= Date.now())) continue
+      let moved
       try {
-        await service.create(toId, request)
+        moved = await service.create(toId, request)
+        await rt.autonomyScheduleMoved?.({ fromSessionId: fromId, toSessionId: toId, oldId: record.id, newId: moved.id })
         await service.delete({ sessionId: fromId, id: record.id })
       } catch (error) {
+        if (moved !== undefined) {
+          await Promise.resolve(rt.autonomyScheduleMoved?.({ fromSessionId: toId, toSessionId: fromId, oldId: moved.id, newId: record.id }))
+            .catch(rollbackError => rt.warn('ds-bot: task binding rollback for %s failed: %s', record.title, rollbackError))
+          await service.delete({ sessionId: toId, id: moved.id })
+            .catch(rollbackError => rt.warn('ds-bot: task rollback for %s failed: %s', record.title, rollbackError))
+        }
         rt.warn('ds-bot: task %s stayed with the earlier part: %s', record.title, error?.message ?? error)
       }
     }

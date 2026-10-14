@@ -379,6 +379,15 @@ export function install(rt) {
         const failure = reason?.kind === 'error' && !switched ? turnFailure(reason.error) : undefined
         if (failure !== undefined) noteTurnFailure(id, failure)
         if (switched) break
+        const autonomyClaimed = rt.autonomyClaimTurnResult?.(id, {
+          turn: event.data?.turn,
+          info,
+          joined,
+          texts,
+          failure,
+          reason,
+        }) === true
+        if (autonomyClaimed) break
         // A model that writes its tool call as text ends the turn as if it were done,
         // though nothing ran. It gets one more turn on the same trigger, so a waiting
         // round or sender gets the real answer; a second time, the text goes on without

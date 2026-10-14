@@ -141,6 +141,7 @@ export function install(rt) {
       if (target.id === sender.id) refuse('You cannot stop yourself.')
       const { running } = activeSessions(target.id)
       if (running.length === 0) refuse(`${target.name} is not running right now, so there is nothing to stop. Use message_bot to reach it.`)
+      await rt.autonomyBeforeStop?.({ botId: target.id })
       for (const sessionId of running) {
         const agent = await rt.resolveAgent(sessionId)
         agent.cancel({ kind: 'hook', reason: 'ds-bot/stopped' })
@@ -420,6 +421,7 @@ export function install(rt) {
         askedAt: Date.now(),
       }
       await rt.save()
+      await rt.autonomyQuestionOpened?.(id, state.questions[id])
       exec.concludeTurn?.()
       return 'The card is on screen; the user\'s answer arrives as their next message.'
     },
