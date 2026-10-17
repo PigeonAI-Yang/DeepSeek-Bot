@@ -1,7 +1,7 @@
 import { createElement as h, Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { currentPart, latestMemoryChange } from './text.js'
-import { ArrowUpIcon, CloseIcon, ArrowDownIcon, MemoryIcon } from './icons.js'
+import { ArrowUpIcon, CloseIcon, ArrowDownIcon, MemoryIcon, SidePanelIcon } from './icons.js'
 import { botState, BotAvatar, RoomAvatar } from './mark.js'
 import { ActivityIndicator } from './activity-row.js'
 import { clockLabel, openingTurn, unseenSince, Shimmer, workPhrase, recordActivity } from './cells.js'
@@ -312,7 +312,11 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     mounted && panelStyle ? h(RuntimeStatusPanel, { sessionId, bot, roster, running, useLive, useToolState, panelId, style: panelStyle, expanded, busy, memberStatus }) : null),
     h('span', { className: 'bt-sr', role: 'status' }, memoryNotice ? t('Memory updated') : ''),
     h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
-    h(OutputsCard, { key: sessionId, sessionId, useOutputs, useSession, actions }))
+    h(OutputsCard, { key: sessionId, sessionId, useOutputs, useSession, actions }),
+    // DSH's way into its right sidebar sits in the session header this pill replaces.
+    actions.hasRightSidebar?.()
+      ? h('button', { type: 'button', className: 'bt-icon-btn bt-head-side', 'data-bt-right-sidebar': '', 'aria-label': t('Show or hide the right sidebar'), title: t('Right sidebar'), onClick: () => actions.toggleRightSidebar() }, h(SidePanelIcon))
+      : null)
 }
 
 // New-message pills. "N new messages ↓" takes Back to bottom's place when
