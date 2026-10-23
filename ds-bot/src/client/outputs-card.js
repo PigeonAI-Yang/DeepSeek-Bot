@@ -1,8 +1,10 @@
 import { createElement as h, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import * as ui from '@deepseek-ai/dsh-client-ui-primitives'
-import { ArrowDownIcon } from './icons.js'
+import { ImageGallery } from './image-preview.js'
+import { ArrowDownIcon, FolderIcon } from './icons.js'
 import { t } from './i18n.js'
+import { SPRING_SHAPE, SPRING_STRETCH, useLinger, useSurfaceMorph } from './motion.js'
 
 const CARD_WIDTH = 280
 const CARD_GUTTER = 16
@@ -22,17 +24,19 @@ function PhotoPlaceholder() {
   h('path', { d: 'm21 15-5-5L5 20' }))
 }
 
-function OutputRow({ sessionId, item, actions, onPreview }) {
+function OutputRow({ sessionId, item, actions, onPreview, onHover, onLeave }) {
   const [thumbnail, setThumbnail] = useState(null)
   const loadImageRef = useRef(actions.loadOutputImage)
   loadImageRef.current = actions.loadOutputImage
+  const loadMediaRef = useRef(actions.loadMediaImage)
+  loadMediaRef.current = actions.loadMediaImage
 
   useEffect(() => {
     let current = true
     setThumbnail(null)
     if (item.kind === 'image' && item.attachment && typeof loadImageRef.current === 'function') {
       Promise.resolve()
-        .then(() => loadImageRef.current(item.attachment))
+        .then(() => item.artifactId && loadMediaRef.current ? loadMediaRef.current(item) : loadImageRef.current(item.attachment))
         .then(src => { if (current && typeof src === 'string' && src !== '') setThumbnail(src) })
         .catch(() => {})
     }
@@ -41,7 +45,7 @@ function OutputRow({ sessionId, item, actions, onPreview }) {
 
   const open = () => {
     if (item.kind === 'image' && thumbnail) {
-      onPreview({ src: thumbnail, name: item.name })
+      onPreview({ ...item, src: thumbnail })
       return
     }
     if (item.path) void Promise.resolve(actions.openOutputFile(item.path)).catch(() => {})
@@ -54,7 +58,18 @@ function OutputRow({ sessionId, item, actions, onPreview }) {
   const clickable = Boolean(thumbnail || item.path)
   return h('button', {
     type: 'button', className: 'bt-outputs-row', disabled: !clickable,
-    title: item.name, onClick: open,
+    title: item.kind === 'image' ? undefined : item.name, 'aria-label': item.name, onClick: open,
+    onPointerEnter: event => {
+      if (!thumbnail || event.pointerType === 'touch') return
+      const rect = event.currentTarget.getBoundingClientRect()
+      const img = event.currentTarget.querySelector('img')
+      onHover({ ...item, src: thumbnail, rect, width: img?.naturalWidth, height: img?.naturalHeight })
+    },
+    onPointerLeave: onLeave,
+    onFocus: event => {
+      if (thumbnail) onHover({ ...item, src: thumbnail, rect: event.currentTarget.getBoundingClientRect() }, true)
+    },
+    onBlur: onLeave,
   },
   h('span', { className: 'bt-outputs-row-icon' }, icon),
   h('span', { className: 'bt-outputs-row-body' },
@@ -62,10 +77,10 @@ function OutputRow({ sessionId, item, actions, onPreview }) {
     h('span', { className: 'bt-outputs-kind' }, t(item.kind === 'image' ? 'Image' : 'File'))))
 }
 
-function OutputList({ sessionId, items, actions, onPreview }) {
+function OutputList({ sessionId, items, actions, onPreview, onHover, onLeave }) {
   if (items.length === 0) return h('div', { className: 'bt-outputs-empty' }, t('No outputs yet'))
   return h('div', { className: 'bt-outputs-list' }, items.map(item => h(OutputRow, {
-    key: item.key, sessionId, item, actions, onPreview,
+    key: item.key, sessionId, item, actions, onPreview, onHover, onLeave,
   })))
 }
 
@@ -143,20 +158,60 @@ function useOutputPlacement() {
   return { placement, setManualOpen }
 }
 
-export function OutputsCard({ sessionId, useOutputs, useSession, actions }) {
+export function OutputsCard({ sessionId, useOutputs, useSession, actions, dock, surfaceRef, embedded = false, manual: givenManual, setManual: givenSetManual, onHoverEnd, onPreviewChange }) {
   const items = useOutputs(value => value)
   const hasMore = useSession(snapshot => snapshot?.hasMore === true)
   const { placement, setManualOpen } = useOutputPlacement()
-  const [manual, setManual] = useState(null)
+  const [ownManual, ownSetManual] = useState(null)
+  const manual = givenManual === undefined ? ownManual : givenManual
+  const setManual = givenSetManual ?? ownSetManual
   const [preview, setPreview] = useState(null)
+  const [hover, setHover] = useState(null)
+  const [cardHovered, setCardHovered] = useState(false)
+  const hoverTimer = useRef(null)
+  const cardHoverTimer = useRef(null)
+  const hoverSuppressed = useRef(false)
+  const previewChange = useRef(onPreviewChange)
+  previewChange.current = onPreviewChange
+  const card = useRef(null)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const previewGeneration = useRef(0)
   const loadingEarlierRef = useRef(false)
   setManualOpen.current = setManual
 
-  const open = manual ?? (placement.ready && placement.fits)
-  const visible = open && placement.maxHeight > 0 && !placement.blocked
-  const toggle = () => setManual(current => !(current ?? (placement.ready && placement.fits)))
+  const open = embedded || (manual ?? (placement.ready && placement.fits)) || (cardHovered && !dock?.dragging) || preview !== null
+  const visible = embedded || (open && placement.maxHeight > 0 && !placement.blocked)
+  const [mounted] = useLinger(visible, SPRING_SHAPE.duration)
+  useSurfaceMorph(card, `${sessionId}:${visible}:${items.length}:${hasMore}:${loadingEarlier}`, visible)
+  useEffect(() => () => { clearTimeout(hoverTimer.current); clearTimeout(cardHoverTimer.current); previewChange.current?.(false) }, [])
+  useEffect(() => { clearTimeout(hoverTimer.current); setHover(null) }, [sessionId, visible])
+  const keepHover = () => { clearTimeout(hoverTimer.current); clearTimeout(cardHoverTimer.current) }
+  const enterCardHover = event => {
+    clearTimeout(cardHoverTimer.current)
+    if (event.pointerType !== 'touch' && !dock?.dragging && !hoverSuppressed.current) setCardHovered(true)
+  }
+  const leaveCardHover = () => {
+    clearTimeout(cardHoverTimer.current)
+    hoverSuppressed.current = false
+    cardHoverTimer.current = setTimeout(() => setCardHovered(false), 160)
+  }
+  const leaveHover = () => {
+    clearTimeout(hoverTimer.current)
+    hoverTimer.current = setTimeout(() => { setHover(null); onHoverEnd?.() }, 160)
+  }
+  const showHover = (value, immediate = false) => {
+    clearTimeout(hoverTimer.current)
+    hoverTimer.current = setTimeout(() => setHover(value), immediate ? 0 : 130)
+  }
+  const toggle = () => {
+    const next = !(manual ?? (placement.ready && placement.fits))
+    setManual(next)
+    if (!next) {
+      clearTimeout(cardHoverTimer.current)
+      hoverSuppressed.current = true
+      setCardHovered(false)
+    }
+  }
   const loadEarlier = async () => {
     if (loadingEarlierRef.current || !hasMore || typeof actions.loadEarlierOutputs !== 'function') return
     loadingEarlierRef.current = true
@@ -167,12 +222,18 @@ export function OutputsCard({ sessionId, useOutputs, useSession, actions }) {
     }
   }
   const showPreview = value => {
+    clearTimeout(hoverTimer.current)
+    clearTimeout(cardHoverTimer.current)
+    setCardHovered(false)
+    setHover(null)
+    previewChange.current?.(true)
     const generation = ++previewGeneration.current
-    setPreview({ ...value, generation })
+    setPreview({ ...value, generation, gallery: actions.imageGallery?.(sessionId) })
   }
   const closePreview = () => {
     previewGeneration.current += 1
     setPreview(null)
+    previewChange.current?.(false)
   }
   if (typeof document === 'undefined') return null
 
@@ -180,39 +241,56 @@ export function OutputsCard({ sessionId, useOutputs, useSession, actions }) {
     '--bt-outputs-top': `${placement.top}px`,
     '--bt-outputs-right': `${placement.right}px`,
     '--bt-outputs-max-height': `${placement.maxHeight}px`,
+    '--bt-surface-duration': `${visible ? SPRING_STRETCH.duration : SPRING_SHAPE.duration}ms`,
+    '--bt-surface-easing': visible ? SPRING_STRETCH.easing : SPRING_SHAPE.easing,
+    ...dock?.styleFor('outputs'),
   }
   const toggleButton = h('button', {
-    type: 'button', className: 'bt-outputs-toggle', style,
+    type: 'button', className: 'bt-outputs-toggle',
     'aria-expanded': visible,
     'aria-label': t('Outputs ({count})', { count: items.length }),
     title: t('Outputs ({count})', { count: items.length }),
     disabled: placement.blocked,
-    onClick: toggle,
+    onClick: () => { if (!dock?.consumeClick()) toggle() },
+    ...dock?.dragProps('outputs'),
   },
-  h('span', null, t('Outputs')),
+  h('span', { className: 'bt-outputs-label-icon', 'aria-hidden': true }, h(FolderIcon)),
   h('span', { className: 'bt-outputs-count', 'aria-hidden': true }, String(items.length)),
   h('span', { className: 'bt-outputs-caret', 'data-open': visible ? '' : undefined, 'aria-hidden': true }, h(ArrowDownIcon)))
 
-  return createPortal(h('div', { className: 'bt-outputs-layer' },
-    visible ? h('section', { className: 'bt-outputs-card', style, role: 'region', 'aria-label': t('Outputs') },
-      h('div', { className: 'bt-outputs-head' },
-        h('div', { className: 'bt-outputs-heading' },
-          h('span', null, t('Outputs')),
-          h('span', { className: 'bt-outputs-count', 'aria-hidden': true }, String(items.length))),
-        h('button', {
-          type: 'button', className: 'bt-outputs-collapse',
-          'aria-label': t('Hide outputs'), title: t('Hide outputs'), onClick: () => setManual(false),
-        }, h(ArrowDownIcon))),
-      h(OutputList, { sessionId, items, actions, onPreview: showPreview }),
+  const body = (mounted || embedded) ? h('div', { className: 'bt-outputs-body', 'data-open': visible ? '' : undefined, inert: visible ? undefined : '' },
+      actions.mediaJobs?.(),
+      h(OutputList, { sessionId, items, actions, onPreview: showPreview, onHover: showHover, onLeave: leaveHover }),
       hasMore ? h('button', {
         type: 'button', className: 'bt-outputs-earlier', disabled: loadingEarlier,
         onClick: loadEarlier,
-      }, loadingEarlier ? t('Loading…') : t('Load earlier outputs')) : null) : toggleButton,
-    preview && visible && ui.ImageLightbox ? h(ui.ImageLightbox, {
-      src: preview.src,
-      alt: preview.name,
-      labels: { dialog: t('Image preview'), close: t('Close') },
+      }, loadingEarlier ? t('Loading…') : t('Load earlier outputs')) : null) : null
+  const ratio = hover?.width > 0 && hover?.height > 0 ? hover.width / hover.height : 1
+  const hoverHeight = Math.min(648, innerHeight - 64, 480 / ratio)
+  const hoverWidth = Math.min(innerWidth - 32, hoverHeight * ratio)
+  const hoverLeft = hover ? Math.max(16, hover.rect.left >= hoverWidth + 28 ? hover.rect.left - hoverWidth - 12 : innerWidth - hoverWidth - 16) : 16
+  const hoverTop = hover ? Math.max(48, Math.min(hover.rect.top, innerHeight - hoverHeight - 44)) : 48
+  const overlays = h('div', { className: 'bt-outputs-layer' },
+    hover && visible ? h('button', {
+      type: 'button', className: 'bt-output-hover', role: 'tooltip', 'aria-label': hover.name,
+      style: { left: hoverLeft, top: hoverTop, width: hoverWidth },
+      onPointerEnter: keepHover, onPointerLeave: () => { leaveHover(); leaveCardHover() }, onFocus: keepHover, onBlur: leaveHover,
+      onClick: () => showPreview(hover), onKeyDown: event => { if (event.key === 'Escape') { event.stopPropagation(); setHover(null) } },
+    }, h('img', { src: hover.src, alt: hover.name, style: { maxHeight: hoverHeight } }), h('span', null, hover.name)) : null,
+    preview && visible ? h(ImageGallery, {
+      image: preview,
+      gallery: preview.gallery,
+      captureInput: () => actions.captureImageInput?.(sessionId),
       onClose: closePreview,
       key: `${sessionId}:${preview.generation}`,
-    }) : null), document.body)
+    }) : null)
+  if (embedded) return h('section', { className: 'bt-outputs-embedded', 'aria-label': t('Outputs') },
+    h('div', { className: 'bt-outputs-embedded-title' }, t('Outputs'), ` · ${items.length}`), body, createPortal(overlays, document.body))
+  return createPortal(h('div', { className: 'bt-outputs-layer' },
+    h('section', {
+      ref: node => { card.current = node; if (surfaceRef) surfaceRef.current = node },
+      className: 'bt-outputs-card', 'data-expanded': visible ? '' : undefined, style,
+      onPointerEnter: enterCardHover, onPointerLeave: leaveCardHover,
+      role: 'region', 'aria-label': t('Outputs'), ...dock?.attrsFor('outputs'),
+    }, toggleButton, body), overlays), document.body)
 }

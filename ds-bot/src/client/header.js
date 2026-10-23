@@ -1,15 +1,16 @@
 import { createElement as h, Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { currentPart, latestMemoryChange } from './text.js'
-import { ArrowUpIcon, CloseIcon, ArrowDownIcon, MemoryIcon, SidePanelIcon } from './icons.js'
+import { ArrowUpIcon, CloseIcon, ArrowDownIcon, MemoryIcon, SidePanelIcon, FolderIcon } from './icons.js'
 import { botState, BotAvatar, RoomAvatar } from './mark.js'
 import { ActivityIndicator } from './activity-row.js'
-import { clockLabel, openingTurn, unseenSince, Shimmer, workPhrase, recordActivity } from './cells.js'
+import { clockLabel, openingTurn, unseenSince, Shimmer, recordActivity } from './cells.js'
 import { modelOf } from './model-menu.js'
 import { NO_WORK, busyMembers, summaryText } from './member-status.js'
-import { dateLocale, t } from './i18n.js'
+import { t } from './i18n.js'
 import { SPRING_SHAPE, SPRING_STRETCH, reducedMotion } from './motion.js'
 import { OutputsCard } from './outputs-card.js'
+import { useCapsuleDock } from './capsule-dock.js'
 
 // -------------------------------------------------------------------------
 // Conversation header
@@ -47,20 +48,14 @@ function MemoryNotice({ shown }) {
     h('span', { className: 'bt-pill-mem-in', ref: inner }, h('span', { className: 'bt-pill-mem-ico' }, h(MemoryIcon)), label))
 }
 
-function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, useToolState, panelId, style, expanded, busy = [], memberStatus = '' }) {
+function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, useToolState, panelId, style, expanded, memberStatus = '', children }) {
   const liveKey = useLive(state => JSON.stringify(state[sessionId] ?? {}))
   const entries = useMemo(() => Object.entries(JSON.parse(liveKey)), [liveKey])
   const active = useToolState(value => value.active)
+  const background = useToolState(value => value.background) ?? active.filter(record => record.background)
   const peer = useToolState(value => value.peer)
   const peerName = peer ? roster.byId[peer.id]?.name ?? peer.name ?? t('another Bot') : undefined
-  const tools = active.length ? active.map(record => [record.key, recordActivity(record, roster)]) : entries.filter(([, entry]) => !entry?.text)
-  const memberActivities = busy.map(member => ({
-    id: member.id,
-    entry: {
-      label: `${member.bot.name} · ${member.state === 'ask' ? t('Waiting for your approval') : workPhrase(member.doing)}`,
-      at: member.state === 'ask' ? member.approvals[0]?.at : member.doing?.since,
-    },
-  }))
+  const tools = active.length ? active.map(record => [record.key, recordActivity(record, roster, { compact: true })]) : entries.filter(([, entry]) => !entry?.text).map(([id, entry]) => [id, { ...entry, label: t(entry?.relay ? 'Coordinating with Bots' : 'Using tools') }])
   const hasQuestion = roster.questions?.[bot ? currentPart(bot) : sessionId] !== undefined
   const status = memberStatus || (hasQuestion ? t('Waiting for your answer') : !running && active.length === 0
     ? hasQuestion ? t('Waiting for your answer') : t('Idle')
@@ -68,36 +63,70 @@ function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, useToolS
       : entries.some(([, entry]) => entry?.relay) ? t('Coordinating with Bots')
         : tools.length > 0 ? tools.at(-1)[1].label : peer ? t('Replying to {name}', { name: peerName }) : t('Waiting for model response'))
   const model = bot ? modelOf(bot, roster) : undefined
-  const activities = busy.length > 0 ? memberActivities.slice(0, 4)
-    : running || active.length ? tools.map(([id, entry]) => ({ id, entry }))
-      .sort((a, b) => (Number.isFinite(b.entry?.at) ? b.entry.at : 0) - (Number.isFinite(a.entry?.at) ? a.entry.at : 0)).slice(0, 4)
-      : []
+  const services = bot ? roster.residentServices?.[bot.id] ?? [] : []
   return h('div', {
     id: panelId, className: 'bt-runtime-popover', role: 'region', 'aria-label': t('Runtime details'),
     'data-runtime-expanded': expanded ? '' : undefined, 'aria-hidden': expanded ? undefined : true,
     inert: expanded ? undefined : '', tabIndex: expanded ? 0 : -1, style,
   },
     h('div', { className: 'bt-runtime-card' },
-      h('div', { className: 'bt-runtime-title' }, t('Runtime details')),
-      h('div', { className: 'bt-runtime-row' },
-        h('div', { className: 'bt-runtime-label' }, t('Current status')),
-        h('div', { className: 'bt-runtime-value' }, status)),
-      model ? h('div', { className: 'bt-runtime-row' },
-        h('div', { className: 'bt-runtime-label' }, t('Current model')),
-        h('div', { className: 'bt-runtime-value' }, `${model.name} · ${model.provider}`)) : null,
-      h('div', { className: 'bt-runtime-row' },
-        h('div', { className: 'bt-runtime-label' }, t('Active tools / coordination')),
-        h('div', { className: 'bt-runtime-value' }, String(busy.length > 0 ? busy.filter(member => member.state === 'work' && member.doing?.tool).length : running ? tools.length : 0))),
-      activities.length > 0 ? h('ul', { className: 'bt-runtime-activity-list' }, activities.map(({ id, entry }) => {
-        const label = typeof entry?.label === 'string' && entry.label ? entry.label : entry?.relay ? t('Coordinating with Bots') : t('Using tools')
-        const started = Number.isFinite(entry?.at) && entry.at > 0
-          ? new Date(entry.at).toLocaleTimeString(dateLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
-          : ''
-        return h('li', { key: id, className: 'bt-runtime-activity-item' },
-          h('span', { className: 'bt-runtime-activity-label' }, label),
-          entry.details ? h('pre', { className: 'bt-runtime-command' }, entry.details) : null,
-          started ? h('span', { className: 'bt-runtime-activity-started' }, `${t('Activity started')} · ${started}`) : null)
-      })) : null))
+      h('div', { className: 'bt-runtime-content' },
+        h('div', { className: 'bt-runtime-title' }, t('Runtime details')),
+        h('div', { className: 'bt-runtime-row' },
+          h('div', { className: 'bt-runtime-label' }, t('Current status')),
+          h('div', { className: 'bt-runtime-value' }, status)),
+        model ? h('div', { className: 'bt-runtime-row' },
+          h('div', { className: 'bt-runtime-label' }, t('Current model')),
+          h('div', { className: 'bt-runtime-value' }, model.name)) : null,
+        h('div', { className: 'bt-runtime-row' },
+          h('div', { className: 'bt-runtime-label' }, t('Background tasks')),
+          h('div', { className: 'bt-runtime-value' }, background.length
+            ? background.map(job => h('div', { key: job.key }, `${job.name === 'image-edit' ? job.object || job.key : job.key} · ${t(job.status === 'stopping' ? 'Stopping' : 'Running')}`))
+            : t('None'))),
+        services.length > 0 ? h('div', { className: 'bt-runtime-row' },
+          h('div', { className: 'bt-runtime-label' }, t('Resident services')),
+          h('div', { className: 'bt-runtime-value' }, services.map(service => h('div', { key: service.id }, `${service.name} · ${t('Online')}`)))) : null,
+        children)))
+}
+
+function measureRuntimeContentWidth(wrapper) {
+  const pill = wrapper.querySelector(':scope > .bt-pill')
+  const popover = wrapper.querySelector(':scope > .bt-runtime-popover')
+  const card = popover?.querySelector(':scope > .bt-runtime-card')
+  const content = card?.querySelector(':scope > .bt-runtime-content')
+  if (!pill || !popover || !card || !content) return null
+  const temporary = [
+    [pill.style, 'width', 'max-content'],
+    [pill.style, 'max-width', 'none'],
+    [pill.style, 'flex', 'none'],
+    [popover.style, 'width', 'max-content'],
+    [popover.style, 'max-width', 'none'],
+    [card.style, 'width', 'max-content'],
+    [card.style, 'max-width', 'none'],
+    [content.style, 'width', 'max-content'],
+    [content.style, 'max-width', 'none'],
+  ]
+  const previous = temporary.map(([style, property]) => [style, property, style.getPropertyValue(property), style.getPropertyPriority(property)])
+  try {
+    for (const [style, property, value] of temporary) style.setProperty(property, value)
+    return Math.ceil(Math.max(pill.getBoundingClientRect().width, popover.getBoundingClientRect().width))
+  } finally {
+    for (const [style, property, value, priority] of previous) {
+      if (value) style.setProperty(property, value, priority)
+      else style.removeProperty(property)
+    }
+  }
+}
+
+function commitRuntimeContentWidth(wrapper) {
+  const card = wrapper.querySelector(':scope > .bt-runtime-popover > .bt-runtime-card')
+  if (!card) return
+  const style = getComputedStyle(card)
+  const width = Math.max(0, card.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight))
+  const value = `${width}px`
+  if (wrapper.style.getPropertyValue('--bt-runtime-content-width') !== value) {
+    wrapper.style.setProperty('--bt-runtime-content-width', value)
+  }
 }
 
 export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useToolState, useWork, useOutputs, actions }) {
@@ -147,15 +176,25 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
   }, [Boolean(room)])
   const memoryNotice = notice && changed !== null && roster.memory !== false
   const hoverWrap = useRef(null)
-  const runtimeWidth = useRef({ sessionId: null, expanded: null, width: null, animation: null })
+  const hoverCloseTimer = useRef(null)
+  const imagePreviewOpen = useRef(false)
+  const outputsRef = useRef(null)
+  const outputCount = useOutputs(value => value.length)
+  const [outputsManual, setOutputsManual] = useState(null)
+  const runtimeWidth = useRef({ sessionId: null, expanded: null, width: null, contentWidth: null, animation: null })
   const panelId = useId()
   const [openForSession, setOpenForSession] = useState(null)
   const [panelStyle, setPanelStyle] = useState(null)
   const [panelForSession, setPanelForSession] = useState(null)
   const [expandedForSession, setExpandedForSession] = useState(null)
+  const dock = useCapsuleDock({ sessionId, runtimeRef: hoverWrap, outputsRef,
+    onMerge: () => setOpenForSession(sessionId),
+    onSplit: () => { setOpenForSession(null); setOutputsManual(false) },
+  })
   const open = openForSession === sessionId
   const mounted = open || panelForSession === sessionId
   const expanded = open && expandedForSession === sessionId
+  useEffect(() => () => clearTimeout(hoverCloseTimer.current), [sessionId])
   const rememberRuntimeWidth = () => {
     const wrapper = hoverWrap.current
     const state = runtimeWidth.current
@@ -163,6 +202,7 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
   }
   const animateRuntimeWidth = (wrapper, from, to, state) => {
     state.width = to
+    if (state.expanded) commitRuntimeContentWidth(wrapper)
     if (typeof wrapper.animate !== 'function' || Math.abs(from - to) < 1 || reducedMotion()) return
     const curve = state.expanded ? SPRING_STRETCH : SPRING_SHAPE
     const animation = wrapper.animate([
@@ -176,16 +216,25 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
       state.width = wrapper.getBoundingClientRect().width
     }
   }
+  const updateRuntimeContentWidth = (wrapper, state) => {
+    const width = measureRuntimeContentWidth(wrapper)
+    if (width === null || (state.contentWidth !== null && Math.abs(width - state.contentWidth) < 1)) return false
+    wrapper.style.setProperty('--bt-runtime-width', `${width}px`)
+    state.contentWidth = width
+    return true
+  }
   useLayoutEffect(() => {
     const wrapper = hoverWrap.current
     if (!wrapper) return
     const state = runtimeWidth.current
     const sameSession = state.sessionId === sessionId
-    if (sameSession && state.expanded === expanded) {
+    if (!sameSession) state.contentWidth = null
+    const expandedChanged = sameSession && state.expanded !== expanded
+    const contentChanged = expanded && updateRuntimeContentWidth(wrapper, state)
+    if (sameSession && !expandedChanged && !(expanded && contentChanged)) {
       if (!state.animation) state.width = wrapper.getBoundingClientRect().width
       return
     }
-    const shouldAnimate = sameSession && state.expanded !== null && state.expanded !== expanded
     const from = state.animation
       ? wrapper.getBoundingClientRect().width
       : sameSession ? state.width : null
@@ -195,7 +244,8 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     state.sessionId = sessionId
     state.expanded = expanded
     state.width = to
-    if (shouldAnimate && from !== null) animateRuntimeWidth(wrapper, from, to, state)
+    if (expanded) animateRuntimeWidth(wrapper, from ?? to, to, state)
+    else if (sameSession && expandedChanged && from !== null) animateRuntimeWidth(wrapper, from, to, state)
   })
   useLayoutEffect(() => {
     const wrapper = hoverWrap.current
@@ -207,19 +257,40 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
       if (Math.abs(nextWidth - headWidth) < 1) return
       headWidth = nextWidth
       const state = runtimeWidth.current
-      if (!state.animation) {
+      const wasAnimating = Boolean(state.animation)
+      const from = wrapper.getBoundingClientRect().width
+      const contentChanged = state.expanded && updateRuntimeContentWidth(wrapper, state)
+      if (!wasAnimating && !contentChanged && !state.expanded) {
         state.width = wrapper.getBoundingClientRect().width
         return
       }
-      const from = wrapper.getBoundingClientRect().width
-      state.animation.cancel()
+      state.animation?.cancel()
       state.animation = null
       const to = wrapper.getBoundingClientRect().width
-      animateRuntimeWidth(wrapper, from, to, state)
+      state.width = to
+      if (state.expanded || wasAnimating) animateRuntimeWidth(wrapper, from, to, state)
     })
     observer.observe(head)
     return () => observer.disconnect()
   }, [sessionId])
+  useLayoutEffect(() => {
+    const wrapper = hoverWrap.current
+    const popover = wrapper?.querySelector(':scope > .bt-runtime-popover')
+    if (!expanded || !popover || typeof MutationObserver !== 'function') return undefined
+    const observer = new MutationObserver(() => {
+      const state = runtimeWidth.current
+      if (!state.expanded || state.sessionId !== sessionId) return
+      const from = wrapper.getBoundingClientRect().width
+      if (!updateRuntimeContentWidth(wrapper, state)) return
+      state.animation?.cancel()
+      state.animation = null
+      const to = wrapper.getBoundingClientRect().width
+      state.width = to
+      animateRuntimeWidth(wrapper, from, to, state)
+    })
+    observer.observe(popover, { childList: true, characterData: true, subtree: true })
+    return () => observer.disconnect()
+  }, [expanded, sessionId])
   useLayoutEffect(() => () => {
     const state = runtimeWidth.current
     state.animation?.cancel()
@@ -274,16 +345,26 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
   return h('div', { className: 'bt-head' },
     h('div', {
       className: 'bt-pill-hover', 'data-runtime-open': mounted ? '' : undefined, ref: hoverWrap,
-      'data-runtime-expanded': expanded ? '' : undefined,
+      'data-runtime-expanded': expanded ? '' : undefined, 'data-dock-merged': dock.merged ? '' : undefined,
+      ...dock.attrsFor('runtime'),
       style: {
         '--bt-runtime-transition-duration': `${expanded ? SPRING_STRETCH.duration : SPRING_SHAPE.duration}ms`,
         '--bt-runtime-transition-easing': expanded ? SPRING_STRETCH.easing : SPRING_SHAPE.easing,
+        ...dock.styleFor('runtime'),
       },
-      onPointerEnter: () => { rememberRuntimeWidth(); setOpenForSession(sessionId) },
-      onPointerLeave: () => { rememberRuntimeWidth(); setOpenForSession(current => current === sessionId ? null : current) },
+      onPointerEnter: () => { clearTimeout(hoverCloseTimer.current); if (!dock.dragging) { rememberRuntimeWidth(); setOpenForSession(sessionId) } },
+      onPointerLeave: () => {
+        if (dock.dragging || imagePreviewOpen.current) return
+        clearTimeout(hoverCloseTimer.current)
+        hoverCloseTimer.current = setTimeout(() => {
+          if (imagePreviewOpen.current || hoverWrap.current?.matches(':hover') || document.querySelector('.bt-output-hover:hover')) return
+          rememberRuntimeWidth()
+          setOpenForSession(current => current === sessionId ? null : current)
+        }, 160)
+      },
       onFocusCapture: () => { rememberRuntimeWidth(); setOpenForSession(sessionId) },
       onBlurCapture: event => {
-        if (!event.currentTarget.contains(event.relatedTarget)) {
+        if (!imagePreviewOpen.current && !event.currentTarget.contains(event.relatedTarget)) {
           rememberRuntimeWidth()
           setOpenForSession(current => current === sessionId ? null : current)
         }
@@ -297,10 +378,16 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
       },
     },
     h('button', {
-      type: 'button', className: 'bt-pill', 'aria-expanded': detailsOpen, 'data-memory': memoryNotice ? 'updated' : undefined,
+      type: 'button', className: 'bt-pill', 'aria-expanded': dock.merged ? expanded : detailsOpen, 'data-memory': memoryNotice ? 'updated' : undefined,
       'aria-describedby': expanded ? panelId : undefined,
       'aria-label': memoryNotice ? t("Memory updated. Open {name}'s memory", { name: roster.byId[changed]?.name ?? name }) : t('View conversation details'),
-      onClick: () => (memoryNotice ? actions.openMemory(changed) : actions.toggleDetails(sessionId)),
+      ...dock.dragProps('runtime'),
+      onClick: () => {
+        if (dock.consumeClick()) return
+        if (dock.merged) { rememberRuntimeWidth(); setOpenForSession(current => current === sessionId ? null : sessionId); return }
+        if (memoryNotice) actions.openMemory(changed)
+        else actions.toggleDetails(sessionId)
+      },
     },
     bot ? h(BotAvatar, { bot, size: 24, state: botState(running, doing, roster.questions?.[currentPart(bot)] !== undefined), badge: false })
       : room ? h(RoomAvatar, { room, roster, size: 24 }) : null,
@@ -308,11 +395,23 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     memberStatus ? h('span', { className: 'bt-pill-status', role: 'status', 'aria-live': 'polite' }, h('span', { className: 'bt-pill-status-label' }, h(Shimmer, null, memberStatus)))
       : h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, useToolState, actions }),
     h(MemoryNotice, { shown: memoryNotice }),
+    dock.merged ? h('span', {
+      className: 'bt-pill-output-count',
+      title: t('Outputs ({count})', { count: outputCount }),
+      'aria-label': t('Outputs ({count})', { count: outputCount }),
+    }, h('span', { className: 'bt-outputs-label-icon', 'aria-hidden': true }, h(FolderIcon)), String(outputCount)) : null,
     h('span', { className: 'bt-pill-go', 'aria-hidden': true }, h(GoArrow))),
-    mounted && panelStyle ? h(RuntimeStatusPanel, { sessionId, bot, roster, running, useLive, useToolState, panelId, style: panelStyle, expanded, busy, memberStatus }) : null),
+    mounted && panelStyle ? h(RuntimeStatusPanel, { sessionId, bot, roster, running, useLive, useToolState, panelId, style: panelStyle, expanded, memberStatus },
+      dock.merged ? h(OutputsCard, { key: sessionId, sessionId, useOutputs, useSession, actions, embedded: true,
+        onHoverEnd: () => { if (!imagePreviewOpen.current && !hoverWrap.current?.matches(':hover')) setOpenForSession(null) },
+        onPreviewChange: value => {
+          imagePreviewOpen.current = value
+          if (!value && !hoverWrap.current?.matches(':hover')) setOpenForSession(null)
+        },
+      }) : null) : null),
     h('span', { className: 'bt-sr', role: 'status' }, memoryNotice ? t('Memory updated') : ''),
     h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
-    h(OutputsCard, { key: sessionId, sessionId, useOutputs, useSession, actions }),
+    dock.merged ? null : h(OutputsCard, { key: sessionId, sessionId, useOutputs, useSession, actions, dock, surfaceRef: outputsRef, manual: outputsManual, setManual: setOutputsManual }),
     // DSH's way into its right sidebar sits in the session header this pill replaces.
     actions.hasRightSidebar?.()
       ? h('button', { type: 'button', className: 'bt-icon-btn bt-head-side', 'data-bt-right-sidebar': '', 'aria-label': t('Show or hide the right sidebar'), title: t('Right sidebar'), onClick: () => actions.toggleRightSidebar() }, h(SidePanelIcon))

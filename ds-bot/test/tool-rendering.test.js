@@ -38,7 +38,7 @@ function renderer() {
     }
     return { ...element, props: { ...element.props, children: render(element.props.children, `${path}:children`) } }
   }
-  return { render, ToolCell: module.exports.ToolCell, TurnTailCell: module.exports.TurnTailCell, recordActivity: module.exports.recordActivity, DisclosureRow }
+  return { render, ToolCell: module.exports.ToolCell, TriggerCell: module.exports.TriggerCell, TurnTailCell: module.exports.TurnTailCell, recordActivity: module.exports.recordActivity, DisclosureRow }
 }
 
 function elements(tree, predicate) {
@@ -74,6 +74,30 @@ test('actual ToolCell collapses a run to one row, expands per-call rows and pres
   assert.equal(merged.props.hidden, true)
 })
 
+test('collapsed tool batches count partial failures and expand with each actual status', () => {
+  const { render, ToolCell, DisclosureRow } = renderer()
+  const completed = { kind: 'tool-result', callId: 'done', name: 'read_file', call: { name: 'read_file', argsRaw: '{"path":"done.txt"}' }, content: [] }
+  const failed = { kind: 'tool-result', callId: 'failed', name: 'write_file', call: { name: 'write_file', argsRaw: '{"path":"failed.txt"}' }, content: [], error: 'disk full' }
+  const records = [...toolRecords(completed), ...toolRecords(failed)]
+  const node = { key: 'done', data: { root: completed }, location: { turn: { turn: 1 } } }
+  const props = {
+    node, sessionId: 'bot',
+    useRoster: select => select({ rooms: [], roomsById: {}, exchangeTurns: {}, byId: { bot: {} }, bots: [] }),
+    useToolState: select => select({ runs: new Map([['done', { records, hidden: false }]]) }),
+    actions: { noteLive: () => {} },
+  }
+  const element = { type: ToolCell, props }
+  let tree = render(element)
+  let rows = elements(tree, item => item.type === DisclosureRow)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].props.collapsedContent.props.children[0], 'Partially failed (1/2)')
+  rows[0].props.onToggle()
+  tree = render(element)
+  rows = elements(tree, item => item.type === DisclosureRow)
+  assert.equal(rows.length, 3)
+  assert.deepEqual(rows.slice(1).map(row => row.props.collapsedContent.props.children[0]), ['Completed', 'Failed'])
+})
+
 test('completed Bot exchange gets a clickable reply event using durable trigger data', () => {
   const { TurnTailCell } = renderer()
   const peer = { id: 'peer', name: 'Other Bot' }
@@ -89,10 +113,29 @@ test('completed Bot exchange gets a clickable reply event using durable trigger 
   assert.equal(TurnTailCell({ ...props, turn: { ...turn, end: { time: 1000, data: { reason: { kind: 'interrupted' } } } } }), null)
 })
 
+test('background job completion triggers stay out of the transcript without hiding other updates', () => {
+  const { TriggerCell } = renderer()
+  const content = [{ type: 'text', text: 'background job pwsh-15 completed' }]
+  const props = {
+    node: { data: { turn: 1, source: { kind: 'tool-jobs' }, content } }, sessionId: 'bot',
+    useRoster: select => select({ byId: {}, exchangeTurns: {} }),
+    useSessions: select => select({ byId: {} }), useTurnClock: select => select({}), useUi: select => select({}), actions: {},
+  }
+  assert.equal(TriggerCell(props), null)
+  const update = TriggerCell({ ...props, node: { data: { ...props.node.data, source: { kind: 'other' } } } })
+  assert.equal(update.props.children[0], content[0].text)
+})
+
 test('runtime activity retains the exact tool, object and authoritative start time', () => {
   const { recordActivity } = renderer()
   const entry = recordActivity({ name: 'pwsh', args: { command: 'python run_image.py' }, object: 'python run_image.py', at: 1234 }, { byId: {}, bots: [] })
   assert.match(entry.label, /pwsh/)
   assert.match(entry.label, /python run_image\.py/)
   assert.equal(entry.at, 1234)
+  const compact = recordActivity({ name: 'pwsh', args: { command: 'python run_image.py' }, object: 'python run_image.py', at: 1234 }, { byId: {}, bots: [] }, { compact: true })
+  assert.doesNotMatch(compact.label, /python|run_image|pwsh/)
+  assert.equal(compact.details, 'python run_image.py')
+  assert.equal(compact.at, 1234)
+  const background = recordActivity({ background: true, status: 'running', object: 'RAW_LONG_COMMAND', at: 1234 }, { byId: {}, bots: [] }, { compact: true })
+  assert.doesNotMatch(background.label, /RAW_LONG_COMMAND/)
 })

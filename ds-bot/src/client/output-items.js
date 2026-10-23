@@ -120,7 +120,9 @@ function outputForNode(node, order, add, cwd) {
       if (image) add(outputCandidate({ attachment: block.attachment, kind: 'image', seq, order: order.value++, source: 'step-image' }))
       if (block?.kind !== 'text' && block?.type !== 'text') continue
       for (const link of markdownOutputLinks(block.text)) {
-        add(outputCandidate({ path: link.destination, cwd, label: link.label, seq, order: order.value++, source: 'markdown' }))
+        const candidate = outputCandidate({ path: link.destination, cwd, label: link.label, seq, order: order.value++, source: 'markdown' })
+        if (Number.isSafeInteger(node.data?.finalNode?.seq)) candidate.sourceLocator = { eventSeq: node.data.finalNode.seq, sourceKey: candidate.key }
+        add(candidate)
       }
     }
     return

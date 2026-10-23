@@ -116,9 +116,11 @@ export function toolArgumentText(value) {
 }
 
 export function toolBatchStatus(records) {
-  for (const status of ['failed', 'running', 'preparing']) {
+  for (const status of ['running', 'preparing']) {
     if (records.some(record => record.status === status)) return status
   }
+  if (records.length && records.every(record => record.status === 'failed')) return 'failed'
+  if (records.some(record => record.status === 'failed')) return 'partial-failed'
   return records.length && records.every(record => record.status === 'completed') ? 'completed' : 'unclassified'
 }
 
@@ -134,6 +136,7 @@ export function toolRuns(snapshot) {
     pending = []
   }
   for (const node of nodes) {
+    if (node.kind === 'context' && node.data?.source?.kind === 'tool-jobs') continue
     if (INTERNAL_KINDS.has(node.kind) || (node.visibility === 'hidden' && !['tool-call', 'turn-trigger', 'steering'].includes(node.kind))) continue
     const nextTurn = node.location?.turn?.turn ?? node.data?.turn ?? node.data?.root?.turn
     if (nextTurn !== turn) flush()

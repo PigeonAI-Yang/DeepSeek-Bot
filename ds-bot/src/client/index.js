@@ -5,6 +5,7 @@ import { countCards, createSource, EMPTY_ROSTER, indexRoster, isAgentSession } f
 import { themeCss, shellTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
 import { MENTION_ORIGIN, currentPart } from './text.js'
 import { outputItems } from './output-items.js'
+import { captureMediaDraft, mergeMediaOutputs } from './media.js'
 import { SHELL_CSS, CONVERSATION_CSS, installStyles, installCompiledStyles } from './styles.js'
 import { lookOf } from './mark.js'
 import { TeamSidebar, ConnectPlugins, YouAvatar, AccountLauncher, FooterAccount, BrandMark, BrandName, TitlebarBrand, BotReturn, SIDEBAR_CSS, RETURN_CSS, holdShellShortcuts } from './sidebar.js'
@@ -36,6 +37,9 @@ import { MEMBER_CSS, MemberDock } from './member-status.js'
 import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
 import { noticeApprovals } from './approval-notices.js'
 import { toolRuns, activeToolRecords, activeReplyPeer } from './tool-records.js'
+import { ImageContextMenu, IMAGE_MENU_CSS } from './image-menu.js'
+import { captureImageInput, IMAGE_PREVIEW_CSS } from './image-preview.js'
+import { conversationImages, earlierImagePage } from './image-gallery.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout']
 
@@ -149,6 +153,7 @@ export function apply(ctx) {
     const live = {}
     if (value.connectors !== undefined && JSON.stringify(value.connectors) !== JSON.stringify(current.connectors ?? [])) live.connectors = value.connectors
     if (value.capabilityStatuses !== undefined && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current.capabilityStatuses ?? {})) live.capabilityStatuses = value.capabilityStatuses
+    if (value.residentServices !== undefined && JSON.stringify(value.residentServices) !== JSON.stringify(current.residentServices ?? {})) live.residentServices = value.residentServices
     if (Object.keys(live).length > 0 && current.ready) roster.set({ ...current, ...live })
     if (value.unchanged || (value.revision === current.revision && value.modelsKey === current.modelsKey)) return
     // On a browser with no visit record yet, everything already there counts as seen.
@@ -416,8 +421,10 @@ export function apply(ctx) {
     landOn: async (id, last) => {
       if (last) await pull().catch(() => {})
       const bot = last ? roster.getSnapshot().byId[last.botId] : undefined
-      setPlain(false)
       const target = bot && currentPart(bot) !== last.sessionId ? currentPart(bot) : partFor(id)
+      const list = ctx.sessions.list.getSnapshot()
+      if (list.phase !== 'ready' || list.byId[target] === undefined) return
+      setPlain(false)
       expected = target
       ctx.uiWorkspace.openSession(target)
     },
@@ -698,6 +705,35 @@ export function apply(ctx) {
   })
   const browserPages = browsers?.pages ?? createSource({})
   const browserTabs = browsers?.tabs ?? createSource({})
+  const shownImageSession = () => Object.values(ctx.sessions.list.getSnapshot().byId ?? {}).find(session => (session?.retainedBy?.mainView ?? 0) > 0)?.id
+  actions.captureImageInput = (sessionId = shownImageSession()) => captureImageInput(ctx.sessions, ctx.get('conversation'), sessionId, shownImageSession)
+  const mediaChanges = createSource(0)
+  let mediaClient
+  ctx.inject(['dsBotMediaClient'], mediaCtx => {
+    mediaClient = mediaCtx.dsBotMediaClient
+    mediaChanges.set(value => value + 1)
+    return () => { mediaClient = undefined; mediaChanges.set(value => value + 1) }
+  })
+  actions.imageGallery = (sessionId = shownImageSession()) => {
+    const binding = sessionId === undefined ? undefined : ctx.sessions.binding(sessionId)
+    if (!binding) return { items: [] }
+    const chat = ctx.uiConversation.binding(binding).target('chat')
+    const cwd = ctx.sessions.list.getSnapshot().byId?.[sessionId]?.cwd
+    const readImages = () => mergeMediaOutputs(conversationImages(chat?.getSnapshot(), { cwd, base: document.baseURI, peekImage: attachment => ctx.uiConversation.peekImageUrl(sessionId, attachment) }), (mediaClient?.outputs(sessionId).getSnapshot() ?? []).map(item => ({ ...item, src: mediaClient.image({ sessionId, item }) })))
+    return {
+      items: readImages(),
+      media: mediaClient?.version === 1 ? {
+        edit: source => mediaClient.edit({ source, sessionId, captureDraft: () => captureMediaDraft(ctx.sessions, ctx.get('conversation'), sessionId, shownImageSession) }),
+        compare: source => mediaClient.compare({ source, sessionId, captureDraft: () => captureMediaDraft(ctx.sessions, ctx.get('conversation'), sessionId, shownImageSession) }),
+      } : undefined,
+      hasMore: binding.session.getSnapshot()?.hasMore === true,
+      loadEarlier: () => earlierImagePage(binding, () => ctx.sessions.binding(sessionId) === binding, readImages),
+      loadImage: attachment => {
+        if (ctx.sessions.binding(sessionId) !== binding) throw new Error('ds-bot: image session is no longer available')
+        return ctx.uiConversation.imageUrl(sessionId, attachment)
+      },
+    }
+  }
   const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, cards, browserPages, browserTabs, surface, update } })
   const outputsByChat = new WeakMap()
   const outputSourceFor = sessionId => {
@@ -708,23 +744,30 @@ export function apply(ctx) {
     let source = outputsByChat.get(chat)
     if (!source) {
       let snapshot = Symbol('unread')
+      let mediaSnapshot
+      let mediaVersion
       let cwd = ctx.sessions.list.getSnapshot().byId?.[sessionId]?.cwd
       let value = []
       source = {
         getSnapshot() {
           const next = chat.getSnapshot()
           const nextCwd = ctx.sessions.list.getSnapshot().byId?.[sessionId]?.cwd
-          if (next !== snapshot || nextCwd !== cwd) {
+          const nextMedia = mediaClient?.outputs(sessionId).getSnapshot()
+          const nextVersion = mediaChanges.getSnapshot()
+          if (next !== snapshot || nextCwd !== cwd || nextMedia !== mediaSnapshot || nextVersion !== mediaVersion) {
+            mediaSnapshot = nextMedia; mediaVersion = nextVersion
             snapshot = next
             cwd = nextCwd
-            value = outputItems(next, { cwd })
+            value = mergeMediaOutputs(outputItems(next, { cwd }), nextMedia ?? [])
           }
           return value
         },
         subscribe: listener => {
           const offChat = chat.subscribe(listener)
           const offSessions = ctx.sessions.list.subscribe(listener)
-          return () => { offChat(); offSessions() }
+          let offMedia = mediaClient?.outputs(sessionId).subscribe(listener)
+          const offContribution = mediaChanges.subscribe(() => { offMedia?.(); offMedia = mediaClient?.outputs(sessionId).subscribe(listener); listener() })
+          return () => { offChat(); offSessions(); offMedia?.(); offContribution() }
         },
       }
       outputsByChat.set(chat, source)
@@ -751,7 +794,7 @@ export function apply(ctx) {
     return {
       ...base,
       hooks: { ...base.hooks, outputs: outputSourceFor(sessionId), toolState: toolSourceFor(sessionId) },
-      actions: { ...actions, loadOutputImage, openOutputFile, loadEarlierOutputs },
+      actions: { ...actions, loadOutputImage, openOutputFile, loadEarlierOutputs, mediaJobs: () => mediaClient?.jobs(sessionId), loadMediaImage: item => mediaClient?.image({ sessionId, item }) },
     }
   }
   ctx.effect(() => noticeApprovals({
@@ -801,7 +844,7 @@ export function apply(ctx) {
               key: job.id, name: job.kind, args: {}, object: job.progress ? `${job.label} · ${job.progress}` : job.label,
               at: job.startedAt, background: true, status: job.status,
             }))
-            value = { runs: toolRuns(next), active: tools.length ? tools : background, peer: activeReplyPeer(next) }
+            value = { runs: toolRuns(next), active: tools.length ? tools : background, background, peer: activeReplyPeer(next) }
           }
           return value
         },
@@ -890,6 +933,8 @@ export function apply(ctx) {
   ]
   const installConversation = () => [
     () => installCompiledStyles(CONVERSATION_CSS, 'conversation'),
+    () => installCompiledStyles(IMAGE_MENU_CSS + IMAGE_PREVIEW_CSS, 'image-menu'),
+    () => shadow('shell.overlay', { id: 'bot-image-menu', order: 65, inject: face }, ImageContextMenu),
     () => installMentions(),
     () => installAtMenu(),
     () => shadow('conversation.session.header', { priority: BOT_PRIORITY, inject: outputsFace }, HeaderPill),

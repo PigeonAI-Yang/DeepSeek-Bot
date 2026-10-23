@@ -520,14 +520,19 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
 // When a Bot's chat moves on to a fresh part, the shell clears the view of the part
 // it archived; the chat then goes on in the Bot's current part instead.
 function useLandOnMainBot(roster, useSessions, actions) {
+  const lastBot = useRef(null)
   const mainView = useSessions((list) => {
     const row = Object.values(list.byId).find(session => (session?.retainedBy?.mainView ?? 0) > 0)
-    return row ? `${row.id}|${row.blank ? 1 : 0}` : ''
+    const bot = row ? roster.byId[row.id] : undefined
+    const landing = bot ?? roster.byId[lastBot.current?.botId] ?? roster.byId[roster.mainBotId]
+    const target = landing && currentPart(landing)
+    return `${list.phase}|${row?.id ?? ''}|${row?.blank ? 1 : 0}|${target && list.byId[target] !== undefined ? 1 : 0}`
   })
-  const lastBot = useRef(null)
   useEffect(() => {
     if (!roster.ready || !roster.mainBotId) return undefined
-    const [id, blank] = mainView.split('|')
+    const [phase, id, blank, available] = mainView.split('|')
+    // The roster can arrive before the Session catalog, including after a reload.
+    if (phase !== 'ready' || available !== '1') return undefined
     const bot = id === '' ? undefined : roster.byId[id]
     if (bot !== undefined) {
       lastBot.current = { botId: bot.id, sessionId: id }

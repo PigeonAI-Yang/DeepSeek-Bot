@@ -122,10 +122,15 @@ test('preserves real command newlines, literal escapes, and Windows paths', () =
 test('batch status reflects failure and outstanding work before completion', () => {
   const records = (...statuses) => statuses.map(status => ({ status }))
   assert.equal(toolBatchStatus(records('completed', 'running')), 'running')
-  assert.equal(toolBatchStatus(records('failed', 'running')), 'failed')
   assert.equal(toolBatchStatus(records('completed', 'preparing')), 'preparing')
+  assert.equal(toolBatchStatus(records('failed', 'running')), 'running')
+  assert.equal(toolBatchStatus(records('failed', 'preparing')), 'preparing')
+  assert.equal(toolBatchStatus(records('failed')), 'failed')
+  assert.equal(toolBatchStatus(records('failed', 'failed')), 'failed')
+  assert.equal(toolBatchStatus(records('completed', 'failed')), 'partial-failed')
   assert.equal(toolBatchStatus(records('completed', 'completed')), 'completed')
   assert.equal(toolBatchStatus(records('completed', 'unclassified')), 'unclassified')
+  assert.equal(toolBatchStatus(records()), 'unclassified')
 })
 
 const toolNode = (seq, root, turn = 1) => ({ key: `tool:${seq}`, kind: 'tool-call', anchorSeq: seq, location: { turn: { turn } }, data: { root } })
@@ -201,6 +206,7 @@ test('one continuous work batch spans native request headers and hidden per-step
     const seq = step * 10
     nodes.push({ key: `request:${step}`, kind: 'request-prompt', anchorSeq: seq, location: { turn: { turn: 1 } }, data: {} })
     nodes.push({ key: `system:${step}`, kind: 'system-prompt', anchorSeq: seq + 1, visibility: 'hidden', data: {} })
+    nodes.push({ key: `job:${step}`, kind: 'context', anchorSeq: seq + 1.5, location: { turn: { turn: 1 } }, data: { source: { kind: 'tool-jobs' } } })
     nodes.push(assistantNode(seq + 2, [{ kind: 'reasoning', text: 'Internal check' }, { kind: 'tool-call', callId: `call:${step}` }]))
     nodes.push(toolNode(seq + 3, result(`call:${step}`, step % 2 ? 'pwsh' : 'job_output', {})))
   }

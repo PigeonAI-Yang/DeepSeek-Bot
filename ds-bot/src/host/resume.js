@@ -3,18 +3,29 @@
 // shutdown also cancels the messages still waiting in a Session's inbox; nothing would
 // ever run either again, and whoever waited for them was not told. DS Bot notes each
 // running Bot turn and each message it delivers until a turn takes it up, in
-// inflight.json; what is still noted at the next start is picked up once.
+// inflight.json; a no-output recovery may be picked up three times across restarts.
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { SOURCE_KIND } from './constants.js'
+import { HANDOFF_ACK, SOURCE_KIND } from './constants.js'
+import { textOf } from './text.js'
 
 // Long enough for DSH to finish opening its workspaces after a start.
 const RESUME_DELAY_MS = 3000
 // A delivery waiting longer than this was not lost to a restart.
 const QUEUED_KEPT_MS = 24 * 60 * 60 * 1000
 const QUEUED_MAX = 50
+const RESUME_MAX_ATTEMPTS = 3
+
+const resumeAttemptOf = record => Number.isSafeInteger(record?.resumeAttempt) && record.resumeAttempt >= 0
+  ? record.resumeAttempt
+  : record?.resumed === true ? 1 : 0
+const resumeProgressOf = record => typeof record?.resumeProgress === 'boolean'
+  ? record.resumeProgress
+  : record?.resumed === true
+const restartClosed = reason => reason?.kind === 'interrupted'
+  || (reason?.kind === 'aborted' && reason.reason?.kind === 'disposed')
 
 export const resumeText = record => [
   'DeepSeek Harness restarted while you were working on this, so your last turn stopped before it finished.',
@@ -51,10 +62,10 @@ export function install(rt) {
   // What the last run left; read before this run notes anything.
   let interrupted = readNotes(file)
 
-  /** @type {Record<string, {botId:string, roomId?:string, since:number, trigger?:any, approval?:{tool:string, reason:string}, resumed?:boolean}>} */
-  let turns = {}
+  /** @type {Record<string, {botId:string, roomId?:string, since:number, trigger?:any, approval?:{tool:string, reason:string}, resumed?:boolean, resumeAttempt?:number, resumeProgress?:boolean}>} */
+  let turns = { ...interrupted.turns }
   /** @type {Record<string, {at:number, args:any}[]>} deliveries no turn has taken up, by Session */
-  let queued = {}
+  let queued = { ...interrupted.queued }
   let writing = Promise.resolve()
   let stopped = false
   let latest
@@ -93,8 +104,36 @@ export function install(rt) {
       if (rest.length === 0) delete queued[sessionId]
       else queued[sessionId] = rest
       persist()
-      return
+      return sessionId
     }
+    return undefined
+  }
+
+  const forgetResumeQueued = (sessionId, exchangeId) => {
+    const list = queued[sessionId] ?? []
+    const rest = list.filter(item => item.args?.resumed !== true || (exchangeId !== undefined && item.args.exchangeId !== exchangeId))
+    if (rest.length === list.length) return
+    queued = { ...queued }
+    if (rest.length === 0) delete queued[sessionId]
+    else queued[sessionId] = rest
+    persist()
+  }
+
+  const updateQueuedAttempt = (exchangeId, resumeAttempt) => {
+    let changed = false
+    for (const [sessionId, list] of Object.entries(queued)) {
+      if (!list.some(item => item.args?.exchangeId === exchangeId)) continue
+      queued = { ...queued, [sessionId]: list.map(item => item.args?.exchangeId === exchangeId
+        ? { ...item, args: { ...item.args, resumeAttempt } }
+        : item) }
+      changed = true
+    }
+    if (changed) persist()
+  }
+
+  const clearRecovery = (sessionId) => {
+    update(sessionId, () => undefined)
+    forgetResumeQueued(sessionId)
   }
 
   const deliver = rt.deliver
@@ -102,12 +141,20 @@ export function install(rt) {
     const noted = { ...args, exchangeId: args.exchangeId ?? randomUUID() }
     const sessionId = noted.sessionId ?? rt.chatOf(noted.toId)
     // Noted before it is sent: a turn may take it up before the send returns.
-    queued = { ...queued, [sessionId]: [...(queued[sessionId] ?? []), { at: Date.now(), args: noted }].slice(-QUEUED_MAX) }
-    persist()
+    const prior = (queued[sessionId] ?? []).find(item => item.args?.exchangeId === noted.exchangeId)
+    const pendingArgs = { ...noted }
+    if (noted.resumed === true) {
+      const currentAttempt = resumeAttemptOf(turns[sessionId] ?? noted)
+      pendingArgs.resumeAttempt = currentAttempt
+    }
+    if (prior === undefined) {
+      queued = { ...queued, [sessionId]: [...(queued[sessionId] ?? []), { at: Date.now(), args: pendingArgs }].slice(-QUEUED_MAX) }
+      persist()
+    }
     try {
       return await deliver(noted)
     } catch (error) {
-      forgetQueued(noted.exchangeId)
+      if (noted.resumed !== true) forgetQueued(noted.exchangeId)
       throw error
     }
   }
@@ -119,22 +166,29 @@ export function install(rt) {
   // A message is done with once a turn takes it up, or once it leaves the inbox untaken
   // while DS Bot runs: the user stopped the Bot, or DS Bot moved or withdrew it.
   ctx.on('agent/inbox/discarded', ({ message } = {}) => {
-    if (message?.source?.kind === SOURCE_KIND && message.source.exchangeId) forgetQueued(message.source.exchangeId)
+    if (message?.source?.kind !== SOURCE_KIND || !message.source.exchangeId) return
+    const sessionId = forgetQueued(message.source.exchangeId)
+    if (message.source.resumed === true && sessionId !== undefined) clearRecovery(sessionId)
   })
   // Exchanges a turn took up since this start, until the resends are done, so a resend
   // never repeats one.
   let taken = Object.keys(interrupted.queued).length > 0 ? new Set() : undefined
-  // The first turn event of each Session since this start, until the noted turns are
-  // picked up. A turn that ends, or still runs, before one starts here outlived the
-  // last run: only DS Bot restarted (the plugin reloaded) and DSH went on.
-  let firstTurn = Object.keys(interrupted.turns).length > 0 ? new Map() : undefined
+  // Lifecycle evidence for Sessions with pending work, including a terminal event
+  // emitted while resolveAgent repairs the DSH event stream.
+  const pendingSessions = new Set([...Object.keys(interrupted.turns), ...Object.keys(interrupted.queued)])
+  let firstTurn = pendingSessions.size > 0 ? new Map([...pendingSessions].map(id => [id, undefined])) : undefined
   ctx.on('session/event', (session, event) => {
     const id = session?.id
     if (id === undefined) return
-    if ((event.type === 'turn/start' || event.type === 'turn/end') && firstTurn?.has(id) === false) firstTurn.set(id, event.type)
-    if (event.type === 'user/message' && event.data?.source?.kind === SOURCE_KIND && event.data.source.exchangeId) {
-      taken?.add(event.data.source.exchangeId)
-      forgetQueued(event.data.source.exchangeId)
+    const source = event.type === 'user/message' ? event.data?.source : undefined
+    if (firstTurn?.has(id)) {
+      if (event.type === 'turn/start') firstTurn.set(id, { type: 'turn/start' })
+      else if (event.type === 'turn/end') firstTurn.set(id, { type: 'turn/end', reason: event.data?.reason })
+      else if (event.type === 'user/message') firstTurn.set(id, { type: 'user/message', source })
+    }
+    if (source?.kind === SOURCE_KIND && source.exchangeId) {
+      taken?.add(source.exchangeId)
+      forgetQueued(source.exchangeId)
     }
     if (!rt.isBotSession(id)) return
     switch (event.type) {
@@ -142,22 +196,67 @@ export function install(rt) {
         const owner = rt.groupOwners.get(id)
         const botId = owner?.botId ?? rt.chatOwners.get(id)
         const managedAutonomy = rt.autonomyOwnsRecovery?.(id) === true
-        update(id, () => ({ botId, ...(owner ? { roomId: owner.roomId } : {}), since: event.time ?? Date.now(), ...(managedAutonomy ? { managedAutonomy: true } : {}) }))
+        update(id, record => ({
+          botId,
+          ...(owner ? { roomId: owner.roomId } : {}),
+          since: event.time ?? Date.now(),
+          ...(managedAutonomy ? { managedAutonomy: true } : {}),
+          ...(record?.trigger ? { trigger: record.trigger } : {}),
+          ...(record?.approval ? { approval: record.approval } : {}),
+          ...(record?.resumed === true ? {
+            resumed: true,
+            resumeAttempt: resumeAttemptOf(record),
+            resumeProgress: resumeProgressOf(record),
+          } : {}),
+        }))
         break
       }
       case 'user/message': {
-        if (event.data?.source?.kind !== SOURCE_KIND) break
+        const resumed = source?.kind === SOURCE_KIND && source.resumed === true
+        if (!resumed) {
+          forgetResumeQueued(id)
+          update(id, record => (record === undefined ? record : {
+            botId: record.botId,
+            ...(record.roomId !== undefined ? { roomId: record.roomId } : {}),
+            since: record.since,
+            ...(record.managedAutonomy === true ? { managedAutonomy: true } : {}),
+            ...(source?.kind === SOURCE_KIND ? { trigger: triggerOf(source) } : {}),
+          }))
+          break
+        }
         // turns.js, installed earlier, has already claimed the turn's trigger.
         const info = rt.live.get(id)?.info
-        update(id, record => (record === undefined || record.trigger !== undefined || info === undefined ? record
-          : { ...record, trigger: triggerOf(info), ...(info.resumed ? { resumed: true } : {}) }))
+        update(id, record => (record === undefined ? record : {
+          ...record,
+          trigger: triggerOf(info ?? source),
+          resumed: true,
+          resumeAttempt: resumeAttemptOf({ ...record, resumed: true, resumeAttempt: source.resumeAttempt }),
+          resumeProgress: source.resumeAttempt === undefined ? true : (record.resumeProgress === true),
+        }))
+        break
+      }
+      case 'assistant/message': {
+        const content = event.data?.message?.content
+        const text = textOf(content)
+        if (text === '' || text === HANDOFF_ACK) break
+        const info = rt.live.get(id)?.info
+        update(id, record => (record?.resumed !== true || info?.resumed !== true
+          || (info.resumeAttempt !== undefined && info.resumeAttempt !== resumeAttemptOf(record))
+          || resumeProgressOf(record) ? record : { ...record, resumeProgress: true }))
+        break
+      }
+      case 'tool/result': {
+        const info = rt.live.get(id)?.info
+        if (event.data?.callId === undefined) break
+        update(id, record => (record?.resumed !== true || info?.resumed !== true
+          || (info.resumeAttempt !== undefined && info.resumeAttempt !== resumeAttemptOf(record))
+          || resumeProgressOf(record) ? record : { ...record, resumeProgress: true }))
         break
       }
       case 'turn/end': {
-        // DSH stops every turn as it shuts down; that one is picked up at the next start.
         const reason = event.data?.reason
-        if (reason?.kind === 'aborted' && reason.reason?.kind === 'disposed') break
-        update(id, () => undefined)
+        if (restartClosed(reason)) break
+        clearRecovery(id)
         break
       }
     }
@@ -167,35 +266,56 @@ export function install(rt) {
   rt.noteApproval = (sessionId, approval) => update(sessionId, record => (record === undefined ? record
     : approval === undefined ? (({ approval: _, ...rest }) => rest)(record) : { ...record, approval }))
 
+  rt.noteResumeDispatch = async (sessionId, { resumeAttempt, exchangeId, source, resent = false, botId, roomId } = {}) => {
+    const current = turns[sessionId]
+    if (current?.managedAutonomy === true || rt.autonomyOwnsRecovery?.(sessionId) === true) return undefined
+    const requested = Number.isSafeInteger(resumeAttempt) && resumeAttempt > 0 ? resumeAttempt : undefined
+    const baseAttempt = Math.max(resumeAttemptOf(current), requested ?? 0)
+    const attempt = resent ? baseAttempt + 1 : requested ?? baseAttempt + 1
+    if (attempt > RESUME_MAX_ATTEMPTS) return undefined
+    update(sessionId, record => ({
+      ...record,
+      botId: record?.botId ?? botId,
+      ...(record?.roomId !== undefined || roomId === undefined ? (record?.roomId !== undefined ? { roomId: record.roomId } : {}) : { roomId }),
+      since: record?.since ?? Date.now(),
+      trigger: source ? triggerOf(source) : record?.trigger,
+      resumed: true,
+      resumeAttempt: attempt,
+      resumeProgress: false,
+    }))
+    if (exchangeId) updateQueuedAttempt(exchangeId, attempt)
+    await writing
+    return attempt
+  }
+
   async function resumeTurn(sessionId, record) {
     if (record.managedAutonomy === true) return
     const bot = rt.botOf(record.botId)
     if (bot === undefined) return
+    const canContinue = resumeAttemptOf(record) < RESUME_MAX_ATTEMPTS && !resumeProgressOf(record)
     const text = resumeText(record)
     if (record.roomId !== undefined) {
       const room = rt.roomOf(record.roomId)
       if (room === undefined || !room.members.includes(bot.id)) return
       await rt.postToRoom(room, bot, '', { resumed: true, quiet: true, ...(record.resumed ? { again: true } : {}) })
-      // A turn already picked up once and cut off again stays stopped: a restart loop
-      // must not run it forever.
-      if (record.resumed) return
-      await rt.deliver({ toId: bot.id, sessionId: room.sessions?.[bot.id] ?? sessionId, role: 'room', roomId: room.id, note: 'picking up after a restart', resumed: true, text, ...(record.trigger?.askedBy ? { askedBy: record.trigger.askedBy } : {}) })
+      if (!canContinue) return
+      await rt.deliver({ toId: bot.id, sessionId: room.sessions?.[bot.id] ?? sessionId, role: 'room', roomId: room.id, note: 'picking up after a restart', resumed: true, resumeAttempt: resumeAttemptOf(record) + 1, ...(record.trigger?.exchangeId ? { exchangeId: record.trigger.exchangeId } : {}), text, ...(record.trigger?.askedBy ? { askedBy: record.trigger.askedBy } : {}) })
       return
     }
-    if (record.resumed) return
+    if (!canContinue) return
     const trigger = record.trigger
     if ((trigger?.role === 'request' || trigger?.role === 'stopped') && trigger.senderSessionId && trigger.audience !== 'user' && rt.botOf(trigger.senderSessionId)) {
       // The sender still waits for this turn's answer, so it goes on under the same exchange.
-      await rt.deliver({ fromId: trigger.senderSessionId, toId: bot.id, role: trigger.role, ...(trigger.exchangeId ? { exchangeId: trigger.exchangeId } : {}), ...(trigger.senderRoomId ? { fromRoomId: trigger.senderRoomId } : {}), resumed: true, text })
+      await rt.deliver({ fromId: trigger.senderSessionId, toId: bot.id, role: trigger.role, ...(trigger.exchangeId ? { exchangeId: trigger.exchangeId } : {}), ...(trigger.senderRoomId ? { fromRoomId: trigger.senderRoomId } : {}), resumed: true, resumeAttempt: resumeAttemptOf(record) + 1, text })
       return
     }
     // A turn that went on with work another Bot asked for still owes that Bot its answer.
-    await rt.deliver({ toId: bot.id, role: 'resume', resumed: true, text, ...(trigger?.work ? { work: trigger.work } : {}) })
+    await rt.deliver({ toId: bot.id, role: 'resume', resumed: true, resumeAttempt: resumeAttemptOf(record) + 1, ...(record.trigger?.exchangeId ? { exchangeId: record.trigger.exchangeId } : {}), text, ...(trigger?.work ? { work: trigger.work } : {}) })
   }
 
   // A hard stop keeps the inbox, which the Session runs once it wakes; only what DSH
   // cancelled is sent again.
-  async function resendQueued(sessionId, list) {
+  async function resendQueued(sessionId, list, recoveryAttempted, recoveryWaiting) {
     // A Session that moved on to a new part since is reached at its current one.
     const current = (args) => {
       if (rt.isBotSession(sessionId)) return sessionId
@@ -208,7 +328,46 @@ export function install(rt) {
     const agent = await rt.resolveAgent(target)
     const waiting = new Set([...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])].map(message => message.source?.exchangeId))
     for (const { args } of fresh) {
-      if (waiting.has(args.exchangeId) || taken?.has(args.exchangeId) === true) continue
+      if (!queued[sessionId]?.some(item => item.args.exchangeId === args.exchangeId)
+        || waiting.has(args.exchangeId) || taken?.has(args.exchangeId) === true) {
+        if (args.resumed === true && waiting.has(args.exchangeId)) recoveryWaiting.add(target)
+        continue
+      }
+      if (args.resumed === true) {
+        if (recoveryAttempted.has(target) || recoveryWaiting.has(target)) continue
+        const record = turns[target]
+        const attempt = Math.max(resumeAttemptOf(record), resumeAttemptOf(args))
+        if (record?.managedAutonomy === true || rt.autonomyOwnsRecovery?.(target) === true) {
+          recoveryWaiting.add(target)
+          continue
+        }
+        if (agent.status === 'running' || ['turn/start', 'user/message'].includes(firstTurn?.get(target)?.type)) {
+          recoveryWaiting.add(target)
+          continue
+        }
+        if (resumeProgressOf(record) || (args.resumeAttempt === undefined && (record === undefined || record.resumed === true))) {
+          forgetResumeQueued(sessionId, args.exchangeId)
+          continue
+        }
+        if (attempt >= RESUME_MAX_ATTEMPTS) {
+          if (args.roomId !== undefined) {
+            const room = rt.roomOf(args.roomId)
+            const bot = rt.botOf(args.toId)
+            if (room !== undefined && bot !== undefined) await rt.postToRoom(room, bot, '', { resumed: true, quiet: true, again: true })
+          }
+          forgetResumeQueued(sessionId, args.exchangeId)
+          clearRecovery(target)
+          continue
+        }
+        if (args.roomId !== undefined) {
+          const room = rt.roomOf(args.roomId)
+          const bot = rt.botOf(args.toId)
+          if (room !== undefined && bot !== undefined) await rt.postToRoom(room, bot, '', { resumed: true, quiet: true, again: true })
+        }
+        recoveryAttempted.add(target)
+        await rt.deliver({ ...args, sessionId: current(args), steer: false, resent: true })
+        continue
+      }
       await rt.deliver({ ...args, sessionId: current(args), steer: false, resent: true })
     }
   }
@@ -216,28 +375,47 @@ export function install(rt) {
   async function resumeAll() {
     await rt.load()
     if (rt.readOnly() !== undefined) return
-    const { turns: noted, queued: dropped } = interrupted
-    interrupted = { turns: {}, queued: {} }
-    // Taken up now, so another restart does not pick them up twice.
-    persist()
+    const recoveryAttempted = new Set()
+    const recoveryWaiting = new Set()
     // Agents and inboxes are read before anything wakes their Sessions.
-    const cut = []
-    for (const [sessionId, record] of Object.entries(noted)) {
-      const first = firstTurn.get(sessionId)
-      if (first === 'turn/end') continue
-      // Still running: noted again, as if it had started here.
-      if (first === undefined && (await rt.resolveAgent(sessionId).catch(() => undefined))?.status === 'running') update(sessionId, () => record)
-      else cut.push([sessionId, record])
-    }
-    firstTurn = undefined
-    for (const [sessionId, list] of Object.entries(dropped)) {
+    for (const [sessionId, list] of Object.entries(interrupted.queued)) {
       if (!Array.isArray(list)) continue
-      await resendQueued(sessionId, list).catch(error => rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error))
+      await resendQueued(sessionId, list, recoveryAttempted, recoveryWaiting).catch(error => rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error))
     }
-    taken = undefined
-    for (const [sessionId, record] of cut) {
+
+    for (const sessionId of Object.keys(interrupted.turns)) {
+      let record = turns[sessionId]
+      if (record === undefined || recoveryAttempted.has(sessionId) || recoveryWaiting.has(sessionId)) continue
+      let observed = firstTurn?.get(sessionId)
+      if (observed?.type === 'turn/end' && !restartClosed(observed.reason)) {
+        clearRecovery(sessionId)
+        continue
+      }
+      if (observed?.type === 'turn/start' || observed?.type === 'user/message') continue
+
+      const agent = await rt.resolveAgent(sessionId).catch(() => undefined)
+      observed = firstTurn?.get(sessionId)
+      record = turns[sessionId]
+      if (record === undefined) continue
+      if (observed?.type === 'turn/end' && !restartClosed(observed.reason)) {
+        clearRecovery(sessionId)
+        continue
+      }
+      if (observed?.type === 'turn/start' || observed?.type === 'user/message' || agent?.status === 'running') continue
+      if (record.managedAutonomy === true || rt.autonomyOwnsRecovery?.(sessionId) === true) continue
+
+      if (resumeProgressOf(record) || resumeAttemptOf(record) >= RESUME_MAX_ATTEMPTS) {
+        await resumeTurn(sessionId, record).catch(error => rt.warn('ds-bot: picking up the turn of %s failed: %s', sessionId, error))
+        clearRecovery(sessionId)
+        continue
+      }
+      recoveryAttempted.add(sessionId)
       await resumeTurn(sessionId, record).catch(error => rt.warn('ds-bot: picking up the turn of %s failed: %s', sessionId, error))
     }
+
+    interrupted = { turns: {}, queued: {} }
+    taken = undefined
+    firstTurn = undefined
   }
 
   ctx.effect(() => {

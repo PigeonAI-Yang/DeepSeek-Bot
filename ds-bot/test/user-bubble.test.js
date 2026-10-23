@@ -23,7 +23,7 @@ function rulesWith(pattern) {
 const declared = (body, property) => body.split(';').map(item => item.trim()).find(item => item.startsWith(`${property}:`))?.slice(property.length + 1)
 const surface = body => declared(body, 'background') ?? declared(body, 'background-color')
 const ruleFor = selector => {
-  const rule = rulesWith(/color:var\(--bt-(?:user-ink|ink)\)/g).find(item => item.selector.startsWith(selector))
+  const rule = rulesWith(/color:var\(--bt-(?:user-ink|ink|chat-ink,var\(--bt-ink\))\)/g).find(item => item.selector.startsWith(selector))
   assert.ok(rule, `no rule for ${selector}`)
   return rule
 }
@@ -167,5 +167,5 @@ test('a user message stays readable when a dark skin repaints the host bubble', 
 test('the surface wins over the host bubble rule that reads the skin variable', () => {
   const { body } = ruleFor('[class*="_userRow"] [class*="_bubble"]')
   assert.equal(surface(body), 'var(--bt-chat-user-bg)!important')
-  assert.equal(declared(body, 'color'), 'var(--bt-ink)!important')
+  assert.equal(declared(body, 'color'), 'var(--bt-chat-ink,var(--bt-ink))!important')
 })

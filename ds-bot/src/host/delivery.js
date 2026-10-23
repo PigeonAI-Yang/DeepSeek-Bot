@@ -48,7 +48,7 @@ export function install(rt) {
   // `length`: the whole message's length when it went as a file (attachLong). `work`:
   // the work (handoffs.js) a result that came back goes on with. `merged`: a request
   // that takes in an earlier one its recipient had not read, under that one's exchange.
-  async function deliver({ fromId, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, askedBy, fromRoomId, files = [], length, work }) {
+  async function deliver({ fromId, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, resumeAttempt, retried = false, resent = false, merged = false, askedBy, fromRoomId, files = [], length, work }) {
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
     if (to === undefined) throw new Error(`Unknown Bot ${toId}`)
@@ -69,6 +69,7 @@ export function install(rt) {
       ...(audience === 'user' ? { audience } : {}),
       ...(deferred ? { deferred: true } : {}),
       ...(resumed ? { resumed: true } : {}),
+      ...(resumed && Number.isSafeInteger(resumeAttempt) ? { resumeAttempt } : {}),
       ...(retried ? { retried: true } : {}),
       ...(askedBy ? { askedBy } : {}),
       ...(fromRoomId ? { senderRoomId: fromRoomId } : {}),
@@ -87,6 +88,18 @@ export function install(rt) {
     }
     await rt.ensureCapabilities(targetSessionId)
     const agent = await resolveAgent(targetSessionId)
+    if (resumed && rt.noteResumeDispatch) {
+      const attempt = await rt.noteResumeDispatch(targetSessionId, {
+        resumeAttempt,
+        exchangeId,
+        source,
+        resent,
+        botId: to.id,
+        roomId,
+      })
+      if (!Number.isSafeInteger(attempt)) return exchangeId
+      source.resumeAttempt = attempt
+    }
     // A steered message cuts into a running turn at its next step; a follow-up
     // queues for the next turn (see turns.js for how each is routed).
     const message = createUserMessage({

@@ -93,17 +93,19 @@ export function UserMessageCell({ node, sessionId, useRoster, actions, renderMes
   return h('div', { className: 'bt-umsg', 'data-steering': steering || undefined },
     h('div', { className: 'bt-ustack' },
       attachments.length > 0 ? h(Attachments, { attachments, renderMessageImages }) : null,
-      text !== '' || rest.length > 0 ? h('div', { className: 'bt-ubody', title: clock(data.time), 'data-folded': folded || undefined },
-        control ? h('div', { className: 'bt-fold-body' }, body) : body,
-        control,
-        rest.map((block, index) => (ui.JsonBlock ? h(ui.JsonBlock, { key: index, label: t('Content'), payload: block }) : null))) : null,
-      referenceLabels.length > 0 ? h('div', { className: 'bt-urefs' }, t('Referenced {labels}', { labels: referenceLabels.join(t(', ')) })) : null),
-    text === '' ? null : h('div', { className: 'bt-utools' }, h(CopyButton, { text })))
+      text !== '' || rest.length > 0 ? h('div', { className: 'bt-utext-row' },
+        h('div', { className: 'bt-ubody', title: clock(data.time), 'data-folded': folded || undefined },
+          control ? h('div', { className: 'bt-fold-body' }, body) : body,
+          control,
+          rest.map((block, index) => (ui.JsonBlock ? h(ui.JsonBlock, { key: index, label: t('Content'), payload: block }) : null))),
+        text === '' ? null : h('div', { className: 'bt-utools' }, h(CopyButton, { text }))) : null,
+      referenceLabels.length > 0 ? h('div', { className: 'bt-urefs' }, t('Referenced {labels}', { labels: referenceLabels.join(t(', ')) })) : null))
 }
 
 export const USER_MESSAGE_CSS = `
-.bt-umsg{display:flex;flex-direction:row-reverse;align-items:center;justify-content:flex-start;gap:4px}
+.bt-umsg{display:flex;flex-direction:row-reverse;align-items:center;justify-content:flex-start;gap:4px;padding-block:32px}
 .bt-ustack{min-width:0;max-width:80%;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.bt-utext-row{display:flex;flex-direction:row-reverse;align-items:center;gap:4px;min-width:0;max-width:100%}
 .bt-ubody{max-width:100%;box-sizing:border-box;background:var(--bt-chat-user-bg);color:var(--bt-ink);box-shadow:inset 0 0 0 .5px var(--bt-line);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 8px);white-space:pre-wrap;word-break:break-word}
 .bt-ubody a{color:inherit}
 .bt-umention{display:inline-flex;align-items:center;gap:3px;vertical-align:-3px;max-width:100%;padding:0 1px;border:0;background:none;color:inherit;font:inherit;font-weight:600;line-height:inherit;cursor:pointer;border-radius:6px;white-space:nowrap}

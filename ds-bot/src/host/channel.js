@@ -77,6 +77,7 @@ export function install(rt) {
     memoryReviews: rt.memoryReviews(),
     connectors: rt.connectorsView(),
     capabilityStatuses: rt.capabilityStatusesView(),
+    residentServices: rt.residentServicesView?.() ?? {},
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
@@ -112,6 +113,7 @@ export function install(rt) {
           if (readOnly === undefined) await rt.bootstrap()
           await rt.catalog()
           await rt.loadSecrets()
+          await rt.refreshResidentServices?.()
           if (body.since === state.revision && (body.models === undefined || body.models === modelsKey())) return ok({ revision: state.revision, unchanged: true, ...live() })
           return ok({ ...view(), ...live() })
         case 'models':

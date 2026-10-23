@@ -74,7 +74,7 @@ export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useL
   const active = useToolState(value => value.active)
   const peer = useToolState(value => value.peer)
   const peerName = peer ? roster.byId[peer.id]?.name ?? peer.name ?? t('another Bot') : undefined
-  const tools = active.length ? active.map(record => recordActivity(record, roster)) : entries.filter(entry => !entry.text).sort((a, b) => a.at - b.at)
+  const tools = active.length ? active.map(record => recordActivity(record, roster, { compact: true })) : entries.filter(entry => !entry.text).sort((a, b) => a.at - b.at).map(entry => ({ ...entry, label: t(entry.relay ? 'Coordinating with Bots' : 'Using tools') }))
   const relaying = tools.some(entry => entry.relay)
   const visible = (running || active.length > 0 || question !== undefined) && (bot !== undefined || room !== undefined)
   const tool = tools.at(-1)

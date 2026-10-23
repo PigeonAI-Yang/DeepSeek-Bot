@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { DisclosureRow, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { inkText } from './inks.js'
 import { linkMentions, normalizeWindowsMarkdownPaths, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
-import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon, PlugIcon } from './icons.js'
+import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon, PlugIcon, ChevronRightIcon } from './icons.js'
 import { colorOf, toolState, BotMark, RoomAvatar } from './mark.js'
 import { AnsweredCell, SettledQuestion, PendingQuestion } from './questions.js'
 import { SecretToolCell } from './secret-card.js'
@@ -118,7 +118,15 @@ function MessageTools({ text, name, sessionId, react, actions }) {
       item(t('Copy'), CopyIcon, copy), item(t('Download'), DownloadIcon, download)), document.body) : null)
 }
 
-function ThinkingRow({ text }) {
+export function ThinkingRow({ text }) {
+  const collapse = event => {
+    const details = event.currentTarget.closest('details')
+    if (!details) return
+    details.open = false
+    const summary = details.querySelector('summary')
+    summary?.focus({ preventScroll: true })
+    summary?.scrollIntoView({ block: 'nearest', behavior: 'instant' })
+  }
   return h(Fragment, null, null,
     h('details', { className: 'bt-think' },
       h('summary', { className: 'bt-thinking-header', 'aria-label': t('Thought it through') },
@@ -132,7 +140,8 @@ function ThinkingRow({ text }) {
         h('path', { d: 'M7 4c0 2 1 3 3 3M5 10c2 0 3 1 3 3M7 20v-3M17 4c0 2-1 3-3 3M19 10c-2 0-3 1-3 3M17 20v-3' })),
         h('span', { className: 'bt-thinking-label' }, t('Thought it through')),
         h('span', { className: 'bt-thinking-chevron', 'aria-hidden': true }, '›')),
-      h('div', { className: 'bt-think-text' }, text)))
+      h('div', { className: 'bt-think-text' }, text),
+      h('button', { type: 'button', className: 'bt-think-collapse', 'aria-label': t('Collapse reasoning'), onClick: collapse }, h(ChevronRightIcon), t('Collapse'))))
 }
 
 // The files a finished turn changed or delivered, linked from inline code in its
@@ -435,7 +444,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       const prompts = reminderPrompts(contentText(data.content))
       return h('div', { className: 'bt-event' }, prompts.length > 0 ? t('Scheduled task: {text}', { text: prompts.join(' · ').slice(0, 80) }) : t('Routine started'))
     }
-    if (source.kind === 'user-question-reply' || source.kind === 'goal') return null
+    if (source.kind === 'user-question-reply' || source.kind === 'goal' || source.kind === 'tool-jobs') return null
     return h('div', { className: 'bt-event' }, contentText(data.content).slice(0, 80) || t('Update'))
   }
 }
@@ -607,15 +616,16 @@ export function workPhrase(doing) {
   return target ? `${label} · ${target}` : label
 }
 
-export function recordActivity(record, roster) {
-  if (record.background) return { at: record.at, label: `${t(record.status === 'stopping' ? 'Stopping background task' : 'Background task')} · ${record.object ?? record.name}`, state: 'working' }
+export function recordActivity(record, roster, { compact = false } = {}) {
+  if (record.background) return { at: record.at, label: compact ? t(record.status === 'stopping' ? 'Stopping background task' : 'Background task running') : `${t(record.status === 'stopping' ? 'Stopping background task' : 'Background task')} · ${record.object ?? record.name}`, details: record.object, state: 'working' }
   const findBot = value => roster.byId[value] ?? roster.bots.find(bot => bot.name === value)
   const entry = toolActivity(record.name, key => record.args[key], findBot) ?? { state: toolState(record.name) }
   const object = record.object?.replace(/\s+/g, ' ').trim()
   const description = typeof record.args.description === 'string' ? record.args.description.trim() : ''
   const details = record.args.command ?? record.args.cmd ?? record.args.code ?? record.args.file_path ?? record.args.path ?? record.args.url
   const phase = t(record.status === 'preparing' ? 'Preparing {tool}' : 'Executing {tool}', { tool: record.name })
-  return { ...entry, at: record.at, details: typeof details === 'string' ? details : undefined, label: [phase, description || object].filter(Boolean).join(' · ') }
+  const short = record.status === 'preparing' ? t('Preparing tools') : record.name === 'job_output' ? t('Reading task result') : entry.label ?? t('Using tools')
+  return { ...entry, at: record.at, details: typeof details === 'string' ? details : undefined, label: compact ? short : [phase, description || object].filter(Boolean).join(' · ') }
 }
 
 // Transcript rows report what is in flight to the one activity row at the tail.
@@ -707,6 +717,7 @@ const TOOL_STATUS_LABELS = {
   running: 'Running',
   completed: 'Completed',
   failed: 'Failed',
+  'partial-failed': 'Partially failed',
   unclassified: 'Unclassified',
 }
 
@@ -753,13 +764,17 @@ function GenericToolRecord({ record }) {
 function GenericToolBatch({ records }) {
   const [open, setOpen] = useState(false)
   const status = toolBatchStatus(records)
+  const statusLabel = TOOL_STATUS_LABELS[status] ?? 'Unclassified'
+  const summary = status === 'partial-failed'
+    ? t(`${statusLabel} ({failed}/{total})`, { failed: records.filter(record => record.status === 'failed').length, total: records.length })
+    : t(statusLabel)
   return h(DisclosureRow, {
     icon: h(PlugIcon),
     title: t('Tool calls ({count})', { count: records.length }),
     open, expandable: true, onToggle: () => setOpen(value => !value),
     running: status === 'preparing' || status === 'running',
     expandOnRowClick: true, keepContentWhenOpen: true,
-    collapsedContent: h('span', { className: 'bt-tool-record-status' }, t(TOOL_STATUS_LABELS[status])),
+    collapsedContent: h('span', { className: 'bt-tool-record-status' }, summary),
     className: 'bt-tool-record-disclosure', rowClassName: 'bt-tool-record-row',
     contentClassName: 'bt-tool-record-content', contentLayoutClassName: 'bt-tool-record-layout',
     leadingClassName: 'bt-tool-record-leading', titleClassName: 'bt-tool-record-title',

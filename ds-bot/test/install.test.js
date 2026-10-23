@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { createServer } from 'node:http'
 import { apply } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 
@@ -101,6 +102,8 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'on llm/stream',
     'effect ds-bot: update check',
     'effect ds-bot: dsh update install',
+    'effect ds-bot: resident service observations',
+    'tool observe_resident_service',
     'effect ds-bot: api route',
     'route POST /api/bot',
     'effect ds-bot: load state',
@@ -162,11 +165,12 @@ const TEAM = {
   questions: {},
 }
 
-test('in the Desktop profile read_browser is the last tool and reads through the window', async (t) => {
+test('in the Desktop profile read_browser reads through the window', async (t) => {
   const { ctx, call, stop } = start(TEAM, { services: { profileContext: { name: 'desktop' } } })
   t.after(stop)
   const tools = ctx.calls.filter(entry => entry.startsWith('tool '))
-  assert.equal(tools.at(-1), 'tool read_browser')
+  assert.equal(tools.at(-1), 'tool observe_resident_service')
+  assert.ok(tools.includes('tool read_browser'))
   assert.ok(ctx.calls.indexOf('effect ds-bot: browser channel') < ctx.calls.indexOf('effect ds-bot: api route'))
   const read = args => ctx.registeredTools.get('read_browser').execute(args, { agent: { id: 'b2' } })
 
@@ -183,6 +187,30 @@ test('in the Desktop profile read_browser is the last tool and reads through the
   assert.match(text, /Hello from the page/)
   assert.match(text, /\[1\] link "More" → https:\/\/example\.com\/more/)
   assert.equal((await call('state', {})).value.browser, true)
+})
+
+test('resident services appear and disappear on unchanged state replies through the registered tool', async t => {
+  const { ctx, call, stop } = start(TEAM)
+  t.after(stop)
+  const initial = (await call('state')).value
+  assert.deepEqual(initial.residentServices, {})
+  let healthy = true
+  const server = createServer((_request, response) => response.end(JSON.stringify(healthy ? { system: { comfyui_version: 'test' }, devices: [] } : {})))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => { server.closeAllConnections(); server.close() })
+  const tool = ctx.registeredTools.get('observe_resident_service')
+  const args = { name: 'ComfyUI', kind: 'comfyui', origin: `http://127.0.0.1:${server.address().port}` }
+  await tool.execute(args, { agent: { id: 'b2' } })
+  const read = () => call('state', { since: initial.revision, models: initial.modelsKey })
+  const online = (await read()).value
+  assert.equal(online.unchanged, true)
+  assert.equal(online.residentServices.b2[0].name, 'ComfyUI')
+  assert.equal(online.residentServices.m1, undefined)
+  healthy = false
+  await tool.execute(args, { agent: { id: 'b2' } })
+  const offline = (await read()).value
+  assert.equal(offline.unchanged, true)
+  assert.deepEqual(offline.residentServices, {})
 })
 
 test('config.browser turns Bot browsers off even in the Desktop profile', (t) => {

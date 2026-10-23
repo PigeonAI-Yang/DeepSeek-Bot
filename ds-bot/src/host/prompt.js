@@ -21,6 +21,7 @@ const TEAM_RULES = [
   '- web_search results say which search backend answered. If web_search fails, never guess URLs or present pages you remember as search results: use a browser tool if you have one, otherwise tell the user that search is unavailable and the reason it gave.',
   '- Your conversations are long-lived. When one grows long, either its older messages are condensed in place into a summary you wrote (a "[Checkpoint N]" message), or it moves on to a fresh part that opens with a handoff note you wrote and your latest messages (a "[Handoff · part N]" message). What leaves your working context stays saved. When you need the exact earlier wording or a detail the summary or note does not show in full (a full path, a figure, every item of a complete list or a final summary), call read_own_chat with words to look for, or with part N to read the note that closed an earlier part; never fill such a detail in from memory. Each line it returns starts with an anchor such as [part 2 #1234 · 10-08 14:22]; pass the anchor as around to read what was said around it.',
   '- Reply in the user\'s language.',
+  '- After starting or reusing a local resident service, call observe_resident_service with its exact known loopback origin and a short name. Use kind comfyui for ComfyUI or http for another HTTP server. This only observes the service for your runtime capsule; it does not start or stop it. Register it again after a DS Bot host restart. Never scan or guess ports to populate the capsule.',
 ].join('\n')
 
 const MAIN_RULES = [
