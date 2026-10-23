@@ -12,7 +12,7 @@ import { HANDOFF_ACK, SOURCE_KIND } from './constants.js'
 import { textOf } from './text.js'
 
 // Long enough for DSH to finish opening its workspaces after a start.
-const RESUME_DELAY_MS = 3000
+export const RESUME_DELAY_MS = 3000
 // A delivery waiting longer than this was not lost to a restart.
 const QUEUED_KEPT_MS = 24 * 60 * 60 * 1000
 const QUEUED_MAX = 50

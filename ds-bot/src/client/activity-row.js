@@ -2,6 +2,7 @@ import { createElement as h, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { Shimmer, recordActivity } from './cells.js'
 import { reducedMotion } from './motion.js'
 import { t } from './i18n.js'
+import { noteClientError } from './diagnostics.js'
 import { currentPart } from './text.js'
 
 // -------------------------------------------------------------------------
@@ -17,6 +18,24 @@ export function elapsedLabel(ms) {
   return minutes % 60 === 0 ? `${hours}h` : `${hours}h ${minutes % 60}m`
 }
 export { reducedMotion }
+
+export const rowVisible = ({ running, streaming, tools, relaying, bot, room, capsule = false, active = [], question }) =>
+  capsule ? (running || active.length > 0 || question !== undefined) && (bot !== undefined || room !== undefined) : running && (!streaming || tools.length > 0) && !relaying && (bot !== undefined || room !== undefined)
+
+// The shell's running slot can sit under wrappers it adds around the flow, so the
+// search is a descendant one; without the slot the row mounts at the flow's tail.
+// No flow at all is a mount failure, noted once per page — the observer keeps
+// retrying in case the transcript is only mid-mount.
+let mountMissed = false
+export function findHost() {
+  const node = document.querySelector('[data-chat-flow] [data-chat-running]')
+    ?? document.querySelector('[data-chat-flow]')
+  if (node === null && !mountMissed) {
+    mountMissed = true
+    noteClientError('activity row', new Error('[data-chat-flow] not found'))
+  }
+  return node
+}
 
 // New rows slide in. The first paint of a transcript, history
 // loaded above, and bulk loads arrive without motion.
@@ -35,7 +54,7 @@ function useRowEntrances(replacing) {
     }
     const scan = () => {
       frame = 0
-      const next = document.querySelector('[data-chat-flow]')
+      const next = findHost()?.closest('[data-chat-flow]') ?? null
       if (next !== column) {
         observer.disconnect()
         column = next
@@ -61,9 +80,15 @@ function useRowEntrances(replacing) {
   }, [])
 }
 
-export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, useToolState, useSession, actions }) {
+export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, useToolState, useSession, useWork, actions }) {
   const roster = useRoster(value => value)
   const running = useSessionStatus(map => map.get(sessionId)?.running === true)
+  const turnAt = useWork?.(work => work.turns?.[sessionId])
+  // Until the host reports the turn's start, the clock counts from when this window
+  // saw the run begin.
+  const runAt = useRef(0)
+  if (!running) runAt.current = 0
+  else if (runAt.current === 0) runAt.current = Date.now()
   const liveKey = useLive(state => JSON.stringify(state[sessionId] ?? {}))
   const pendingInput = useSession(snapshot => Math.max(0, ...(snapshot?.pendingSubmissions ?? []).filter(sub => sub.placement !== 'queued').map(sub => sub.time)))
   const bot = roster.byId[sessionId]
@@ -76,7 +101,7 @@ export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useL
   const peerName = peer ? roster.byId[peer.id]?.name ?? peer.name ?? t('another Bot') : undefined
   const tools = active.length ? active.map(record => recordActivity(record, roster, { compact: true })) : entries.filter(entry => !entry.text).sort((a, b) => a.at - b.at).map(entry => ({ ...entry, label: t(entry.relay ? 'Coordinating with Bots' : 'Using tools') }))
   const relaying = tools.some(entry => entry.relay)
-  const visible = (running || active.length > 0 || question !== undefined) && (bot !== undefined || room !== undefined)
+  const visible = rowVisible({ running, streaming, tools, relaying, bot, room, capsule: true, active, question })
   const tool = tools.at(-1)
   const inputRef = useRef(0)
   const inputAt = Math.max(inputRef.current, pendingInput)
@@ -122,7 +147,7 @@ export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useL
     return () => clearInterval(timer)
   }, [phase])
   if (phase === null || !shown) return null
-  const duration = Math.max(0, now - shown.startedAt)
+  const duration = Math.max(0, now - (turnAt ?? (runAt.current || shown.startedAt)))
   const elapsed = duration >= 60000 ? elapsedLabel(duration) : duration >= 1000 ? `${Math.floor(duration / 1000)}s` : null
   const pending = tool && inputAt > (tool.at ?? 0)
   return h('span', { className: 'bt-pill-status', 'data-exiting': phase === 'out' ? '' : undefined, role: 'status', 'aria-live': 'polite' },

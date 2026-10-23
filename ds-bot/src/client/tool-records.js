@@ -5,7 +5,7 @@ const ARGUMENT_KEYS = ['file_path', 'path', 'cwd', 'url', 'query', 'q', 'pattern
 const PRIVATE_TOOLS = new Set([
   'message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group',
   'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret',
-  'ask_user_question', 'read_group_chat', 'remember', 'forget',
+  'ask_user_question', 'show_view', 'read_group_chat', 'remember', 'forget',
 ])
 const PRIVATE_KEY = /token|key|password|secret|authorization/i
 const hasDedicatedCall = call => call && (PRIVATE_TOOLS.has(toolName(call)) || (call.subCalls ?? []).some(hasDedicatedCall))

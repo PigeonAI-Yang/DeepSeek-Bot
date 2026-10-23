@@ -1,12 +1,13 @@
 import { createElement as h, Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { currentPart, latestMemoryChange } from './text.js'
-import { ArrowUpIcon, CloseIcon, ArrowDownIcon, MemoryIcon, SidePanelIcon, FolderIcon } from './icons.js'
+import { ArrowUpIcon, CloseIcon, ArrowDownIcon, MemoryIcon, FolderIcon } from './icons.js'
 import { botState, BotAvatar, RoomAvatar } from './mark.js'
 import { ActivityIndicator } from './activity-row.js'
 import { clockLabel, openingTurn, unseenSince, Shimmer, recordActivity } from './cells.js'
 import { modelOf } from './model-menu.js'
 import { NO_WORK, busyMembers, summaryText } from './member-status.js'
+import { viewBottom } from './motion.js'
 import { t } from './i18n.js'
 import { SPRING_SHAPE, SPRING_STRETCH, reducedMotion } from './motion.js'
 import { OutputsCard } from './outputs-card.js'
@@ -22,6 +23,9 @@ const GoArrow = () => h('svg', { width: 14, height: 14, viewBox: '-12 -12 24 24'
 const MEMORY_NOTICE_MS = 3_200
 const RUNTIME_PANEL_EXIT_MS = SPRING_SHAPE.duration
 const noNews = select => select({})
+const noOutputs = select => select([])
+const emptyTools = { active: [], background: [], runs: new Map() }
+const noTools = select => select(emptyTools)
 
 // True while the latest memory change of the Bots in this conversation is news.
 function useMemoryNotice(ids, useMemoryNews) {
@@ -129,9 +133,12 @@ function commitRuntimeContentWidth(wrapper) {
   }
 }
 
-export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useToolState, useWork, useOutputs, actions }) {
+export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useToolState = noTools, useWork, useOutputs = noOutputs, useStore, useConversationViews, selectView, actions }) {
   const roster = useRoster(value => value)
   const work = useWork?.(value => value) ?? NO_WORK
+  const selectedView = useStore?.(state => state.view)
+  const away = useConversationViews?.(views => views.some(view => view.id === selectedView && view.id !== 'chat')) === true
+    && typeof selectView === 'function'
   const title = useSessions(list => list.byId[sessionId]?.displayTitle ?? list.byId[sessionId]?.title ?? '')
   const firstTurns = useSessions(list => {
     const outline = list.projectionsBySession?.[sessionId]?.values?.turnOutline ?? list.byId[sessionId]?.projectionValues?.turnOutline
@@ -159,8 +166,9 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
   const detailsOpen = useUi(state => state.details === sessionId)
   const name = bot?.name ?? room?.name ?? ''
   const useNews = useMemoryNews ?? noNews
-  const memoryIds = bot ? [bot.id] : room?.members ?? []
+  const memoryIds = bot ? [bot.id] : room ? [room.id, ...room.members] : []
   const notice = useMemoryNotice(memoryIds, useNews)
+  // While the notice shows, the pill opens the memory that changed: a Bot's, or the group's.
   const changed = useNews(map => latestMemoryChange(map, memoryIds))
   useEffect(() => {
     document.body.style.setProperty('--bt-placeholder', JSON.stringify(name ? t('Message {name}', { name }) : t('Message')))
@@ -174,11 +182,12 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     else delete document.body.dataset.btRoom
     return () => { delete document.body.dataset.btRoom }
   }, [Boolean(room)])
-  const memoryNotice = notice && changed !== null && roster.memory !== false
+  const memoryNotice = !away && notice && changed !== null && roster.memory !== false
   const hoverWrap = useRef(null)
   const hoverCloseTimer = useRef(null)
   const imagePreviewOpen = useRef(false)
   const outputsRef = useRef(null)
+  const hasOutputs = useOutputs !== noOutputs
   const outputCount = useOutputs(value => value.length)
   const [outputsManual, setOutputsManual] = useState(null)
   const runtimeWidth = useRef({ sessionId: null, expanded: null, width: null, contentWidth: null, animation: null })
@@ -378,11 +387,13 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
       },
     },
     h('button', {
-      type: 'button', className: 'bt-pill', 'aria-expanded': dock.merged ? expanded : detailsOpen, 'data-memory': memoryNotice ? 'updated' : undefined,
+      type: 'button', className: 'bt-pill', 'aria-expanded': away ? undefined : dock.merged ? expanded : detailsOpen, 'data-memory': memoryNotice ? 'updated' : undefined,
       'aria-describedby': expanded ? panelId : undefined,
-      'aria-label': memoryNotice ? t("Memory updated. Open {name}'s memory", { name: roster.byId[changed]?.name ?? name }) : t('View conversation details'),
+      title: away ? name : undefined,
+      'aria-label': away ? t('Back to chat') : memoryNotice ? t("Memory updated. Open {name}'s memory", { name: roster.byId[changed]?.name ?? name }) : t('View conversation details'),
       ...dock.dragProps('runtime'),
       onClick: () => {
+        if (away) { selectView('chat'); return }
         if (dock.consumeClick()) return
         if (dock.merged) { rememberRuntimeWidth(); setOpenForSession(current => current === sessionId ? null : sessionId); return }
         if (memoryNotice) actions.openMemory(changed)
@@ -391,9 +402,9 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     },
     bot ? h(BotAvatar, { bot, size: 24, state: botState(running, doing, roster.questions?.[currentPart(bot)] !== undefined), badge: false })
       : room ? h(RoomAvatar, { room, roster, size: 24 }) : null,
-    h('span', { className: 'bt-pill-name' }, bot?.name ?? room?.name ?? (title || t('New chat'))),
+    h('span', { className: 'bt-pill-name' }, away ? t('Back to chat') : bot?.name ?? room?.name ?? (title || t('New chat'))),
     memberStatus ? h('span', { className: 'bt-pill-status', role: 'status', 'aria-live': 'polite' }, h('span', { className: 'bt-pill-status-label' }, h(Shimmer, null, memberStatus)))
-      : h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, useToolState, actions }),
+      : h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, useToolState, useWork, actions }),
     h(MemoryNotice, { shown: memoryNotice }),
     dock.merged ? h('span', {
       className: 'bt-pill-output-count',
@@ -402,7 +413,7 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     }, h('span', { className: 'bt-outputs-label-icon', 'aria-hidden': true }, h(FolderIcon)), String(outputCount)) : null,
     h('span', { className: 'bt-pill-go', 'aria-hidden': true }, h(GoArrow))),
     mounted && panelStyle ? h(RuntimeStatusPanel, { sessionId, bot, roster, running, useLive, useToolState, panelId, style: panelStyle, expanded, memberStatus },
-      dock.merged ? h(OutputsCard, { key: sessionId, sessionId, useOutputs, useSession, actions, embedded: true,
+      hasOutputs && dock.merged ? h(OutputsCard, { key: sessionId, sessionId, useOutputs, useSession, actions, embedded: true,
         onHoverEnd: () => { if (!imagePreviewOpen.current && !hoverWrap.current?.matches(':hover')) setOpenForSession(null) },
         onPreviewChange: value => {
           imagePreviewOpen.current = value
@@ -411,11 +422,7 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
       }) : null) : null),
     h('span', { className: 'bt-sr', role: 'status' }, memoryNotice ? t('Memory updated') : ''),
     h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
-    dock.merged ? null : h(OutputsCard, { key: sessionId, sessionId, useOutputs, useSession, actions, dock, surfaceRef: outputsRef, manual: outputsManual, setManual: setOutputsManual }),
-    // DSH's way into its right sidebar sits in the session header this pill replaces.
-    actions.hasRightSidebar?.()
-      ? h('button', { type: 'button', className: 'bt-icon-btn bt-head-side', 'data-bt-right-sidebar': '', 'aria-label': t('Show or hide the right sidebar'), title: t('Right sidebar'), onClick: () => actions.toggleRightSidebar() }, h(SidePanelIcon))
-      : null)
+    !hasOutputs || dock.merged ? null : h(OutputsCard, { key: sessionId, sessionId, useOutputs, useSession, actions, dock, surfaceRef: outputsRef, manual: outputsManual, setManual: setOutputsManual }))
 }
 
 // New-message pills. "N new messages ↓" takes Back to bottom's place when
@@ -451,19 +458,23 @@ function useTranscriptView() {
         divider,
         center: Math.round(box.left + box.width / 2),
         top: Math.round(headerBottom + 8),
-        bottom: Math.round(window.innerHeight - box.bottom + composer + 8),
+        bottom: Math.round(viewBottom() - box.bottom + composer + 8),
       }
       setView(prev => (prev && Object.keys(next).every(key => prev[key] === next[key]) ? prev : next))
     }
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure) }
     document.addEventListener('scroll', schedule, true)
     window.addEventListener('resize', schedule)
+    window.visualViewport?.addEventListener('resize', schedule)
+    window.visualViewport?.addEventListener('scroll', schedule)
     schedule()
     return () => {
       cancelAnimationFrame(frame)
       observer.disconnect()
       document.removeEventListener('scroll', schedule, true)
       window.removeEventListener('resize', schedule)
+      window.visualViewport?.removeEventListener('resize', schedule)
+      window.visualViewport?.removeEventListener('scroll', schedule)
     }
   }, [])
   return view

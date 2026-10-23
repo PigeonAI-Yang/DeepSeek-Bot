@@ -1,6 +1,6 @@
 import { createElement as h, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import * as ui from '@deepseek-ai/dsh-client-ui-primitives'
+import * as ui from './dsh-primitives.js'
 import { ImageGallery } from './image-preview.js'
 import { ArrowDownIcon, FolderIcon } from './icons.js'
 import { t } from './i18n.js'

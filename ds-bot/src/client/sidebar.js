@@ -1,14 +1,14 @@
-import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
-import { FishLogo } from '@deepseek-ai/dsh-client-ui-primitives'
+import { FishLogo } from './dsh-primitives.js'
 import { isMainOf } from './sources.js'
 import { currentPart, previewOf, relativeShort } from './text.js'
-import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon } from './icons.js'
+import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon, SignOutIcon } from './icons.js'
 import { MAIN_LOOK } from './characters.js'
 import { botState, BotMark, BotAvatar, RoomAvatar } from './mark.js'
 import { reducedMotion } from './activity-row.js'
 import { Shimmer, workPhrase } from './cells.js'
-import { springEasing, SPRING_SHAPE } from './motion.js'
+import { springEasing, SPRING_SHAPE, useViewport, viewBottom } from './motion.js'
 import { hostText, t } from './i18n.js'
 import { showsDshRow } from './dsh-offer.js'
 
@@ -35,6 +35,8 @@ const useGroupWork = (useWork, pick) => (useWork ? useWork(work => JSON.stringif
 const workKeys = text => JSON.parse(text)
 const doingOf = ({ tool, said, note, target, switching }) => ({ tool, said, note, target, switching })
 const workLine = (lead, doing, more) => h(Shimmer, null, `${lead} · ${workPhrase(doing)}…${more > 0 ? ` +${more}` : ''}`)
+// The row already names the Bot; its own-chat preview is just what it is doing.
+const doingLine = doing => h(Shimmer, null, `${workPhrase(doing)}…`)
 // The Bots and groups a Bot waits for (handoffs.js), by the names they have now.
 const waitingFor = (roster, waits) => {
   const names = [...(waits?.bots ?? []).map(id => roster.byId[id]?.name), ...(waits?.rooms ?? []).map(id => roster.roomsById[id]?.name)].filter(Boolean)
@@ -58,6 +60,8 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
   const groups = workKeys(useGroupWork(useWork, rooms => Object.entries(rooms).flatMap(([roomId, entries]) => entries.filter(entry => entry.botId === id).map(entry => ({ id: roomId, ...doingOf(entry) })))))
   const away = !running && groups.length > 0
   const state = botState(running || away, doing, alert)
+  // A Bot running in its own chat previews what it is doing, like a group's row.
+  const runningLine = running && doing ? doingLine(doing) : null
   const awayLine = away ? workLine(roster.roomsById[groups[0].id]?.name ?? t('a group chat'), groups[0], groups.length - 1) : null
   const waits = workKeys(useWork ? useWork(work => JSON.stringify(work.waiting?.[id] ?? null)) : 'null')
   const waitsFor = state === 'waiting' ? waitingFor(roster, waits) : ''
@@ -85,9 +89,10 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
   pinned && !wide ? h(PinMark) : null,
   wide ? h('span', { className: 'bt-row-body' },
     h('span', { className: 'bt-row-name' }, h('span', { className: 'bt-row-title' }, bot.name), pinned ? h(PinMark) : null),
-    awayLine ? h('span', { className: 'bt-row-preview' }, awayLine)
-      : waitsFor ? h('span', { className: 'bt-row-preview' }, waitsFor)
-        : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
+    runningLine ? h('span', { className: 'bt-row-preview' }, runningLine)
+      : awayLine ? h('span', { className: 'bt-row-preview' }, awayLine)
+        : waitsFor ? h('span', { className: 'bt-row-preview' }, waitsFor)
+          : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
   wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null)
 }
 
@@ -244,8 +249,10 @@ function useListGlide(listRef, layout, key) {
 }
 
 export function TeamSidebar(props) {
-  const { wide, useRoster, useUi, useSessions, actions } = props
+  const { wide, expandSidebar, useRoster, useUi, useSessions, actions } = props
   const listRef = useRef(null)
+  const closing = useRef(false)
+  useLayoutEffect(() => { closing.current = false })
   const roster = useRoster(value => value)
   const markedUnread = useUi(value => value.unread)
   props.useRegistry(value => value)
@@ -267,7 +274,26 @@ export function TeamSidebar(props) {
   const main = roster.byId[roster.mainBotId]
   useListGlide(listRef, wide, order.map(entry => entry.item.id).join(','))
   useLandOnMainBot(roster, useSessions, actions)
-  const rowProps = { roster, actions, useSessions, useUi, useSessionStatus: props.useSessionStatus, useSessionRetainInfo: props.useSessionRetainInfo, useActivity: props.useActivity, useWork: props.useWork, wide }
+  // The shell keeps wide content during its collapse fade. Normalize through its
+  // public expansion action before toggling; coalesce synchronous activations
+  // until React commits the result.
+  const navigate = (open, id) => {
+    const result = open(id)
+    if (wide && window.innerWidth < 1024 && !closing.current) {
+      closing.current = true
+      expandSidebar?.()
+      actions.toggleSidebar()
+    }
+    return result
+  }
+  const rowActions = {
+    ...actions,
+    openSession: id => navigate(actions.openSession, id),
+    openAgent: id => navigate(actions.openAgent, id),
+    openAgentSession: id => navigate(actions.openAgentSession, id),
+    newAgentSession: id => navigate(actions.newAgentSession, id),
+  }
+  const rowProps = { roster, actions: rowActions, useSessions, useUi, useSessionStatus: props.useSessionStatus, useSessionRetainInfo: props.useSessionRetainInfo, useActivity: props.useActivity, useWork: props.useWork, wide }
   // Typing while the sidebar has focus starts a search.
   const typeToSearch = (event) => {
     if (event.defaultPrevented || event.key.length !== 1 || event.key === ' ' || event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent.isComposing) return
@@ -323,11 +349,13 @@ function UpdateButton({ useUpdate, actions, titlebar = false }) {
   const dshRow = showsDshRow(dsh, update?.app)
   if (!update?.available && !dshRow && phase === 'idle' && dshPhase === 'idle') return null
   const cloudPhase = phase === 'installing' || dshPhase === 'installing' ? 'installing' : phase !== 'idle' ? phase : dshPhase
-  const toggle = () => {
+  const tick = useViewport()
+  useLayoutEffect(() => {
+    if (!open) return
     const rect = button.current?.getBoundingClientRect()
     if (rect) setBox({ left: Math.max(8, Math.min(rect.left, window.innerWidth - 288)), top: rect.bottom + 6 })
-    setOpen(value => !value)
-  }
+  }, [open, tick])
+  const toggle = () => setOpen(value => !value)
   const start = () => {
     setError('')
     void actions.installUpdate().catch(failure => setError(hostText(failure?.message ?? String(failure))))
@@ -381,11 +409,15 @@ function UpdateButton({ useUpdate, actions, titlebar = false }) {
                 }, dshPhase === 'installing' ? t('Updating…') : dshPhase === 'failed' ? t('Try again') : t('Update')))) : null), document.body) : null)
 }
 
+// The footer entry to the shell's plugin panel.
 export function ConnectPlugins({ wide, actions }) {
   if (!wide) return null
   return h('span', { className: 'bt-connect-wrap' },
-    h('button', { type: 'button', className: 'bt-connect bt-connect-foot', onClick: () => actions.selectPanel('plugins') },
-      h(PlugIcon), t('Connect plugins')))
+    h('button', {
+      type: 'button', className: 'bt-connect bt-connect-foot',
+      onClick: () => actions.selectPanel('plugins'),
+    },
+    h(PlugIcon), t('Connect plugins')))
 }
 
 // Account seat of the Settings trigger: the visible label stays for assistive tech only.
@@ -450,6 +482,9 @@ function pressSettingsShortcut() {
   }))
 }
 
+const NO_SUBSCRIBE = () => () => {}
+const NO_SNAPSHOT = () => null
+
 // The footer avatar opens an account menu above itself, with Bot settings as one
 // entry. Shell panels hidden from the Bot sidebar (plugins, automation) live here too.
 // `seat` is the shell's settings.launcher seat: at priority -10 the whale wins it
@@ -487,11 +522,54 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
     window.addEventListener('keydown', onKey, true)
     return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey, true) }
   }, [open])
-  const toggle = () => {
-    const rect = button.current?.getBoundingClientRect()
-    if (rect) setBox({ left: rect.left, bottom: window.innerHeight - rect.top + 5 })
-    setOpen(value => !value)
+  // The shell's account plugin lends its sign-out operation; the item shows only
+  // when the plugin's entry is there and its account snapshot says signed in. The
+  // entry can arrive after this mounts, so its operations follow the entry.
+  const signIn = actions.signInEntry?.() ?? null
+  const ops = useMemo(() => signIn?.inject?.() ?? {}, [signIn])
+  const accountSource = ops.hooks?.account
+  const account = useSyncExternalStore(accountSource?.subscribe ?? NO_SUBSCRIBE, accountSource ? () => accountSource.getSnapshot() : NO_SNAPSHOT)
+  const signedIn = signIn !== null && typeof ops.signOut === 'function' && account?.view?.status === 'credential-stored'
+  const accountT = actions.accountT?.() ?? (key => key)
+  const [confirm, setConfirm] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [signOutError, setSignOutError] = useState('')
+  const askSignOut = async () => {
+    setSignOutError('')
+    let state = 'none'
+    try {
+      if (await ops.hasRunningAccountTasks?.()) state = 'running'
+    } catch { state = 'unknown' }
+    setConfirm(state)
   }
+  const cancelSignOut = () => { setConfirm(null); setSignOutError('') }
+  const runSignOut = async () => {
+    setBusy(true)
+    setSignOutError('')
+    try {
+      await ops.signOut()
+      setConfirm(null)
+      setOpen(false)
+    } catch (error) {
+      setSignOutError(String(error?.message ?? error))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const tick = useViewport()
+  const anchor = () => {
+    const rect = button.current?.getBoundingClientRect()
+    if (rect) setBox({ left: rect.left, bottom: viewBottom() - rect.top + 5 })
+  }
+  useLayoutEffect(() => { if (open) anchor() }, [open, tick])
+  const toggle = () => { if (!open) anchor(); setOpen(value => !value) }
+  // Closing the menu drops a half-finished sign-out confirm with it.
+  useEffect(() => {
+    if (open) return
+    setConfirm(null)
+    setSignOutError('')
+    setBusy(false)
+  }, [open])
   const groups = [
     [
       [t('Usage'), GaugeIcon, () => actions.openSettings('usage')],
@@ -503,16 +581,23 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
       [t('Switch to classic Agent mode'), SwitchIcon, () => actions.setSurface('agent')],
     ],
   ]
+  if (signedIn) groups.push([[accountT('signOut'), SignOutIcon, askSignOut, undefined, true]])
   return h(Fragment, null,
     h('button', { ref: button, type: 'button', className: 'bt-account', 'aria-label': t('Account'), 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: toggle },
       h('span', { className: 'bt-you', 'aria-hidden': true }, h(BotMark, { look: MAIN_LOOK, size: 24 }))),
     open && box ? createPortal(h('div', { className: 'bt-menu bt-menu-up bt-account-menu', role: 'menu', 'aria-label': t('Account'), style: box },
-      groups.map((group, index) => h(Fragment, { key: index },
-        index > 0 ? h('div', { className: 'bt-menu-sep', role: 'separator' }) : null,
-        group.map(([label, Icon, run, hint]) => h('button', {
-          key: label, type: 'button', role: 'menuitem',
-          onClick: () => { setOpen(false); void Promise.resolve(run()).catch(error => actions.reportError(error, 'menu')) },
-        }, h(Icon), h('span', { className: 'bt-menu-label' }, label), hint ? h('span', { className: 'bt-menu-hint' }, hint) : null))))), document.body) : null)
+      confirm !== null ? h('div', { className: 'bt-confirm', role: 'alertdialog', 'aria-label': accountT('signOut') },
+        h('p', { className: 'bt-confirm-text' }, accountT(confirm === 'running' ? 'signOutRunningDescription' : confirm === 'unknown' ? 'signOutUnknownDescription' : 'signOutDescription')),
+        signOutError !== '' ? h('p', { className: 'bt-confirm-error', role: 'alert' }, signOutError) : null,
+        h('div', { className: 'bt-confirm-row' },
+          h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: cancelSignOut }, t('Cancel')),
+          h('button', { type: 'button', className: 'bt-confirm-go', disabled: busy, onClick: () => { void runSignOut() } }, accountT('signOut'))))
+        : groups.map((group, index) => h(Fragment, { key: index },
+          index > 0 ? h('div', { className: 'bt-menu-sep', role: 'separator' }) : null,
+          group.map(([label, Icon, run, hint, stay]) => h('button', {
+            key: label, type: 'button', role: 'menuitem',
+            onClick: () => { if (stay !== true) setOpen(false); void Promise.resolve(run()).catch(error => actions.reportError(error, 'menu')) },
+          }, h(Icon), h('span', { className: 'bt-menu-label' }, label), hint ? h('span', { className: 'bt-menu-hint' }, hint) : null))))), document.body) : null)
 }
 
 // Opens the Main Bot whenever the main view holds no Bot conversation, the way
@@ -585,7 +670,7 @@ export function BrandName() {
   return h('span', { style: { fontWeight: 600, fontSize: 14 } }, 'DS Bot')
 }
 
-const titlebarIconMask = paths => `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${paths.map(path => `<path d="${path}"/>`).join('')}</svg>`)}")`
+const titlebarIconMask = paths => `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${paths.map(path => `<path d="${path}"/>`).join('')}</svg>`)}")`
 const APPLICATION_MASK = titlebarIconMask([
   'M4 5h12',
   'M4 10h12',
@@ -699,12 +784,12 @@ export function TitlebarBrand({ actions, useUpdate }) {
         'button.bt-titlebar-action:focus-visible,[role="menubar"]>button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}',
         ':host-context(html[data-input-modality="pointer"]) button.bt-titlebar-action:focus-visible,:host-context(html[data-input-modality="pointer"]) [role="menubar"]>button:focus-visible{outline-color:transparent}',
         'button.bt-titlebar-action svg{display:block;width:16px;height:16px;flex:none}',
-        `button.bt-titlebar-action.bt-update{position:relative;color:var(--bt-accent,#4D6BFE);animation:bt-update-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}`,
+        `button.bt-titlebar-action.bt-update{position:relative;color:var(--bt-accent);animation:bt-update-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}`,
         'button.bt-titlebar-action.bt-update[data-phase=installed]{color:var(--bt-ink-2)}',
         'button.bt-titlebar-action.bt-update[data-phase=installing] .bt-cloud-arrow{animation:bt-cloud-drop 1.1s cubic-bezier(.45,0,.55,1) infinite}',
         '@keyframes bt-update-in{from{opacity:0;transform:scale(.6);filter:blur(4px)}}',
         '@keyframes bt-cloud-drop{0%{transform:translateY(-3px);opacity:0}35%{opacity:1}70%{transform:translateY(1px);opacity:1}100%{transform:translateY(2px);opacity:0}}',
-        'button.bt-titlebar-action.bt-update .bt-update-dot{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:#E5484D;box-shadow:0 0 0 1.5px var(--bt-sidebar)}',
+        'button.bt-titlebar-action.bt-update .bt-update-dot{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--bt-update-dot-color);box-shadow:0 0 0 1.5px var(--bt-sidebar)}',
         '@media (prefers-reduced-motion:reduce){button.bt-titlebar-action.bt-update,button.bt-titlebar-action.bt-update .bt-cloud-arrow{animation:none}}',
         '[role="menubar"]>button::before{content:"";display:block;width:16px;height:16px;flex:none;background-color:currentColor;mask-repeat:no-repeat;mask-position:center;mask-size:contain;-webkit-mask-repeat:no-repeat;-webkit-mask-position:center;-webkit-mask-size:contain}',
         `[role="menubar"]>button:first-child::before{mask-image:${APPLICATION_MASK};-webkit-mask-image:${APPLICATION_MASK}}`,
@@ -756,6 +841,14 @@ body[data-bt-titlebar-actions] .bt-titlebar-moved{display:none}
 body[data-bt-titlebar-update] .bt-titlebar-update-moved{display:none}
 body[data-bt-titlebar-update] .bt-side-top{display:none}
 body[data-bt-titlebar-actions] .bt-side-top:not(:has(.bt-update)){display:none}
+.bt-confirm{width:260px;max-width:72vw;padding:10px 12px 12px;display:flex;flex-direction:column;gap:10px}
+.bt-confirm-text{margin:0;font-size:13px;line-height:19px;color:var(--bt-ink-2)}
+.bt-confirm-error{margin:0;font-size:12px;line-height:17px;color:var(--bt-danger);overflow-wrap:anywhere}
+.bt-confirm-row{display:flex;justify-content:flex-end;gap:8px}
+.bt-menu .bt-confirm button{width:auto;min-height:0}
+.bt-confirm-go{height:28px;padding:0 14px;border:0;border-radius:999px;background:var(--bt-accent);color:var(--bt-accent-ink);font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:opacity .12s ease}
+.bt-confirm-go:hover:not(:disabled){opacity:.9}
+.bt-confirm-go:disabled{opacity:.6;cursor:default}
 .bt-side-top .bt-brand{cursor:default;padding-left:6px}
 .bt-side-top .bt-brand:hover{background:none}
 .bt-brand .bt-mark{flex:none}
@@ -771,13 +864,13 @@ body[data-bt-titlebar-actions] .bt-side-top:not(:has(.bt-update)){display:none}
 
 /* The update cloud springs in when a newer DS Bot shows up; its arrow drops in a
    loop while the install runs. */
-.bt-round.bt-update{position:relative;color:var(--bt-accent,#4D6BFE);animation:bt-update-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
+.bt-round.bt-update{position:relative;color:var(--bt-accent);animation:bt-update-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
 .bt-round.bt-update svg{width:17px;height:17px}
 .bt-round.bt-update[data-phase=installed]{color:var(--bt-ink-2)}
 @keyframes bt-update-in{from{opacity:0;transform:scale(.6);filter:blur(4px)}}
 .bt-update[data-phase=installing] .bt-cloud-arrow{animation:bt-cloud-drop 1.1s cubic-bezier(.45,0,.55,1) infinite}
 @keyframes bt-cloud-drop{0%{transform:translateY(-3px);opacity:0}35%{opacity:1}70%{transform:translateY(1px);opacity:1}100%{transform:translateY(2px);opacity:0}}
-.bt-update-dot{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:#E5484D;box-shadow:0 0 0 1.5px var(--bt-sidebar)}
+.bt-update-dot{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--bt-update-dot-color);box-shadow:0 0 0 1.5px var(--bt-sidebar)}
 .bt-update-pop{position:fixed;z-index:60;width:280px;padding:14px 14px 12px;border-radius:14px;background:var(--bt-main);border:.5px solid var(--bt-line-2);box-shadow:0 10px 20px -3px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.1);color:var(--bt-ink);box-sizing:border-box;transform-origin:top left;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;animation:bt-update-pop ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
 @keyframes bt-update-pop{from{opacity:0;transform:scale(.96);filter:blur(4px)}}
 .bt-update-title{font-size:14px;line-height:20px;font-weight:600}
@@ -786,7 +879,7 @@ body[data-bt-titlebar-actions] .bt-side-top:not(:has(.bt-update)){display:none}
 .bt-update-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:12px}
 .bt-update-notes{margin-right:auto;font-size:12.5px;color:var(--bt-ink-2);text-decoration:none}
 .bt-update-notes:hover{color:var(--bt-ink);text-decoration:underline}
-.bt-update-go{height:30px;padding:0 14px;border:0;border-radius:999px;background:var(--bt-accent,#4D6BFE);color:var(--bt-accent-ink,#fff);font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:opacity .12s ease,transform .12s ease}
+.bt-update-go{height:30px;padding:0 14px;border:0;border-radius:999px;background:var(--bt-accent);color:var(--bt-accent-ink,#fff);font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:opacity .12s ease,transform .12s ease}
 .bt-update-go:hover:not(:disabled){opacity:.9}
 .bt-update-go:active:not(:disabled){transform:scale(.96)}
 .bt-update-go:disabled{opacity:.6;cursor:default}

@@ -4,6 +4,7 @@ import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, CloseIcon, PencilIcon, Re
 import { imageGallery } from './image-gallery.js'
 import { useEscape } from './overlay-hooks.js'
 import { t } from './i18n.js'
+import { ANNOTATION_COLOR } from './themes.js'
 
 export function captureImageInput(sessions, conversation, sessionId, currentSession) {
   if (sessionId === undefined) return null
@@ -116,7 +117,7 @@ export function ImagePreview({ src, alt, onClose, captureInput, navigation, load
   const [ready, setReady] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [color, setColor] = useState('#ff4545')
+  const [color, setColor] = useState(ANNOTATION_COLOR)
   const [width, setWidth] = useState(5)
   const [count, setCount] = useState(0)
   const [attach] = useState(() => captureInput?.() ?? null)
@@ -283,7 +284,7 @@ export function ImagePreview({ src, alt, onClose, captureInput, navigation, load
 }
 
 export const IMAGE_PREVIEW_CSS = `
-.bt-image-preview{position:fixed;inset:var(--dsh-frame-chrome-top,40px) 0 0;z-index:200;display:flex;padding:12px;background:rgba(0,0,0,.88);color:#f2f2f2}
+.bt-image-preview{position:fixed;inset:var(--dsh-frame-chrome-top,40px) 0 0;z-index:200;display:flex;padding:12px;background:rgba(0,0,0,.88);color:var(--bt-preview-ink)}
 .bt-image-preview-dialog{display:flex;flex:1;min-width:0;min-height:0;flex-direction:column;gap:12px;pointer-events:none}
 .bt-image-preview-toolbar{order:2;display:flex;flex:none;align-self:center;align-items:center;justify-content:center;gap:4px;width:max-content;max-width:100%;box-sizing:border-box;pointer-events:auto;min-height:40px;padding:6px;border-radius:16px;background:var(--bt-bubble);color:var(--bt-ink);box-shadow:0 6px 24px rgba(0,0,0,.24);flex-wrap:wrap}
 .bt-image-preview-tools{display:contents}
@@ -302,5 +303,5 @@ export const IMAGE_PREVIEW_CSS = `
 .bt-image-preview-media{display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;pointer-events:auto;border-radius:6px}
 canvas.bt-image-preview-media{touch-action:none;cursor:crosshair;border-radius:0}
 .bt-image-preview-error,.bt-image-preview-hint{order:1;text-align:center;font-size:13px;line-height:20px;pointer-events:auto}
-.bt-image-preview-error{color:#ff8d8d}
+.bt-image-preview-error{color:var(--bt-preview-error)}
 `

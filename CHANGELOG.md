@@ -4,6 +4,96 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-23
+
+### Added
+
+- **Desktop app for Linux**: one AppImage that runs on every distribution and updates itself, and a deb for Debian and Ubuntu (x64). See [Install](README.md#install). ([#410](https://github.com/Fei2411/DeepSeek-Bot/issues/410), [#412](https://github.com/Fei2411/DeepSeek-Bot/pull/412))
+- **Side questions with `/btw`**: in a Bot's own chat, type `/btw <question>` to ask while it works. The Bot answers from the conversation so far, without stopping its task or running any tool, and the answer stays out of its history. The question and the answer stay as a card in the chat, which you can cancel while it is being answered. ([#407](https://github.com/Fei2411/DeepSeek-Bot/issues/407), [#413](https://github.com/Fei2411/DeepSeek-Bot/pull/413))
+- **Message layout** in Settings → General → Appearance: a Bubble width slider (50–100%), and a flat layout that shows a Bot's words without a bubble, under its avatar, name and time, with a Text width of its own. ([#380](https://github.com/Fei2411/DeepSeek-Bot/issues/380), [#446](https://github.com/Fei2411/DeepSeek-Bot/issues/446), [#447](https://github.com/Fei2411/DeepSeek-Bot/pull/447), [#448](https://github.com/Fei2411/DeepSeek-Bot/pull/448))
+- The desktop app has the Bot browser too. Each Bot's sign-ins stay after you quit. ([#449](https://github.com/Fei2411/DeepSeek-Bot/issues/449), [#451](https://github.com/Fei2411/DeepSeek-Bot/pull/451))
+- In the desktop app you can import cookies into a Bot's browser from a file or from an installed Chrome, Edge or Firefox profile. ([#458](https://github.com/Fei2411/DeepSeek-Bot/issues/458), [#461](https://github.com/Fei2411/DeepSeek-Bot/pull/461))
+- Bot mode's account menu has a Sign out item for the DeepSeek account. ([#398](https://github.com/Fei2411/DeepSeek-Bot/issues/398), [#425](https://github.com/Fei2411/DeepSeek-Bot/pull/425))
+- A saved key's purpose can be edited or cleared in Settings → Secrets. ([#387](https://github.com/Fei2411/DeepSeek-Bot/issues/387), [#435](https://github.com/Fei2411/DeepSeek-Bot/pull/435))
+- Bots can draw charts, small calculators whose numbers update as you drag, and custom sandboxed views in their replies. ([#468](https://github.com/Fei2411/DeepSeek-Bot/issues/468), [#471](https://github.com/Fei2411/DeepSeek-Bot/pull/471))
+
+### Changed
+
+- Chat bubbles widen with the window instead of stopping at a fixed width. ([#380](https://github.com/Fei2411/DeepSeek-Bot/issues/380), [#447](https://github.com/Fei2411/DeepSeek-Bot/pull/447))
+- A Bot's thinking is hidden by default; turn on **Show thinking** in Settings → General → Appearance to see it above the reply. Bot chats no longer show lines such as "Tools updated". ([#465](https://github.com/Fei2411/DeepSeek-Bot/issues/465), [#466](https://github.com/Fei2411/DeepSeek-Bot/pull/466))
+- Only one right panel opens at a time, and the Bot drawer has a New terminal button in place of the header's right-sidebar toggle. ([#456](https://github.com/Fei2411/DeepSeek-Bot/issues/456), [#470](https://github.com/Fei2411/DeepSeek-Bot/pull/470))
+- In the desktop app, a file you download from the window, such as a chart image, asks where to save it. ([#476](https://github.com/Fei2411/DeepSeek-Bot/issues/476), [#477](https://github.com/Fei2411/DeepSeek-Bot/pull/477))
+- Groups no longer drop a Bot's or your @ calls. Bot-to-Bot relays pause at the group's limit and go on when you press Continue or write. ([#395](https://github.com/Fei2411/DeepSeek-Bot/issues/395), [#433](https://github.com/Fei2411/DeepSeek-Bot/pull/433))
+- On phone-width screens the details panel covers the chat instead of crushing it, and settings fill the screen. ([#438](https://github.com/Fei2411/DeepSeek-Bot/pull/438))
+- On touch screens a tap on a message opens its tools. ([#439](https://github.com/Fei2411/DeepSeek-Bot/pull/439))
+- On phones, menus stay above the on-screen keyboard, controls stay clear of the home indicator, and focusing a field no longer zooms the page. ([#315](https://github.com/Fei2411/DeepSeek-Bot/issues/315), [#440](https://github.com/Fei2411/DeepSeek-Bot/pull/440))
+
+### Fixed
+
+- The Windows app saves its settings when it is started through a short path. ([#378](https://github.com/Fei2411/DeepSeek-Bot/issues/378), [#426](https://github.com/Fei2411/DeepSeek-Bot/pull/426))
+- The team no longer stays read-only after a crash when Windows reuses the old process id. ([#428](https://github.com/Fei2411/DeepSeek-Bot/issues/428), [#431](https://github.com/Fei2411/DeepSeek-Bot/pull/431))
+- An unreadable memory or secrets file is no longer overwritten by the next change. ([#409](https://github.com/Fei2411/DeepSeek-Bot/issues/409), [#430](https://github.com/Fei2411/DeepSeek-Bot/pull/430))
+- When a window can only view the team, a Bot's key request shows why no card appears. ([#429](https://github.com/Fei2411/DeepSeek-Bot/issues/429), [#432](https://github.com/Fei2411/DeepSeek-Bot/pull/432))
+- The activity row under a Bot's chat and the sidebar preview show what a Bot is doing again on DSH 0.2.1. ([#349](https://github.com/Fei2411/DeepSeek-Bot/issues/349), [#434](https://github.com/Fei2411/DeepSeek-Bot/pull/434))
+- The desktop app keeps web search working after web-search-auto is turned off, from its next start. ([#128](https://github.com/Fei2411/DeepSeek-Bot/issues/128), [#436](https://github.com/Fei2411/DeepSeek-Bot/pull/436))
+- An earlier part of a Bot's chat shows the view cards the Bot displayed there again. ([#415](https://github.com/Fei2411/DeepSeek-Bot/issues/415), [#418](https://github.com/Fei2411/DeepSeek-Bot/pull/418))
+- A question card and a view card open together no longer both answer the same letter key. ([#404](https://github.com/Fei2411/DeepSeek-Bot/issues/404), [#405](https://github.com/Fei2411/DeepSeek-Bot/pull/405))
+- The activity row no longer disappears and comes back while a Bot works through several steps. ([#465](https://github.com/Fei2411/DeepSeek-Bot/issues/465), [#466](https://github.com/Fei2411/DeepSeek-Bot/pull/466))
+- The highlight under the Bot's tab in the side panel covers the whole tab again after you come back from a browser tab. ([#472](https://github.com/Fei2411/DeepSeek-Bot/issues/472), [#474](https://github.com/Fei2411/DeepSeek-Bot/pull/474))
+
+## [0.2.0] - 2026-10-21
+
+### Added
+
+- **Desktop app for Windows and macOS**: DeepSeek Bot runs on its own, with its own DeepSeek Harness 0.2.1-rc.2 and its own data, so it does not depend on the DSH you have. You can sign in with your DeepSeek account in it. Windows gets an installer for your user only (x64); macOS gets a zip for Apple chips and one for Intel. On the first open on macOS, allow it in System Settings → Privacy & Security → Open Anyway. See [Install](README.md#install). ([#303](https://github.com/Fei2411/DeepSeek-Bot/pull/303), [#323](https://github.com/Fei2411/DeepSeek-Bot/pull/323), [#334](https://github.com/Fei2411/DeepSeek-Bot/pull/334), [#336](https://github.com/Fei2411/DeepSeek-Bot/pull/336), [#351](https://github.com/Fei2411/DeepSeek-Bot/issues/351), [#377](https://github.com/Fei2411/DeepSeek-Bot/pull/377))
+- At its first start the desktop app asks where to keep its data and the Bots' files, and offers to copy your Bot team from DeepSeek Harness; your DSH data is only read. Before the copy it reads each chat once and asks you to update DeepSeek Bot when a newer DeepSeek Harness wrote one. Quitting before the first start is finished saves nothing, and the next start asks again. Links that npm or pnpm left in the old team workspace are copied too. ([#324](https://github.com/Fei2411/DeepSeek-Bot/pull/324), [#340](https://github.com/Fei2411/DeepSeek-Bot/pull/340), [#353](https://github.com/Fei2411/DeepSeek-Bot/issues/353), [#375](https://github.com/Fei2411/DeepSeek-Bot/pull/375))
+- The Windows desktop app updates itself: it downloads a new release in the background and asks whether to restart now, or installs it at the next quit. The macOS app tells you when a new version is ready to download. ([#329](https://github.com/Fei2411/DeepSeek-Bot/pull/329), [#334](https://github.com/Fei2411/DeepSeek-Bot/pull/334))
+- On Windows the desktop app's window has no system frame: the title bar dims with the page under a dialog, and the Bot details panel reaches the top under the window buttons. On Windows 11 its sidebar shows the Mica material. On macOS, Cmd+W closes the window (File → Close Window). ([#362](https://github.com/Fei2411/DeepSeek-Bot/issues/362), [#352](https://github.com/Fei2411/DeepSeek-Bot/issues/352), [#377](https://github.com/Fei2411/DeepSeek-Bot/pull/377), [#392](https://github.com/Fei2411/DeepSeek-Bot/pull/392), [#396](https://github.com/Fei2411/DeepSeek-Bot/pull/396))
+- **Locations in Settings → General**: change the team workspace, where Bots and groups without a folder of their own work; they go on in a fresh part in the new folder. In the desktop app, the data location moves there too. The old folders stay as they were. ([#364](https://github.com/Fei2411/DeepSeek-Bot/issues/364))
+- A Main Bot can set a Bot's thinking level, and is told when the model has no such level. ([#99](https://github.com/Fei2411/DeepSeek-Bot/issues/99))
+- Every Bot in a group chat can post into it from its own chat; its post calls only the members it @-mentions. ([#318](https://github.com/Fei2411/DeepSeek-Bot/pull/318))
+- Docker: tested images on GHCR, and a startup that reuses the saved profile without upgrading plugins by itself. ([#273](https://github.com/Fei2411/DeepSeek-Bot/pull/273))
+- **Group memory**: a group chat keeps its own memory. Only its members read it, in that group, and a Bot outside the group no longer gets what the group learned. It shows in the group's details. ([#151](https://github.com/Fei2411/DeepSeek-Bot/issues/151), [#300](https://github.com/Fei2411/DeepSeek-Bot/pull/300))
+- **View cards**: in its own chat a Bot can show a card with `show_view`: text, metrics, a table, progress, choices, a confirmation or a short form. A card with choices, a confirmation or a form waits for your answer. ([#386](https://github.com/Fei2411/DeepSeek-Bot/issues/386), [#388](https://github.com/Fei2411/DeepSeek-Bot/pull/388))
+- `create_bot` and `update_bot` can set a Bot's profile photo, from a local image file or a data URL. A photo that does not load shows the Bot's character. ([#320](https://github.com/Fei2411/DeepSeek-Bot/issues/320), [#343](https://github.com/Fei2411/DeepSeek-Bot/pull/343))
+- Group chat messages show when they were posted, and each Bot reply shows how long its turn ran. ([#254](https://github.com/Fei2411/DeepSeek-Bot/issues/254), [#342](https://github.com/Fei2411/DeepSeek-Bot/pull/342))
+
+### Changed
+
+- When a Bot changes to a folder outside its working folder, that folder becomes its working folder (with your approval when needed) and it goes on in a fresh part there. ([#345](https://github.com/Fei2411/DeepSeek-Bot/pull/345))
+- The work clock counts from the start of the Bot's turn and reads `8s`, then `1m 8s`. ([#286](https://github.com/Fei2411/DeepSeek-Bot/pull/286), [#302](https://github.com/Fei2411/DeepSeek-Bot/pull/302))
+- The install commands use DeepSeek Harness 0.2.1-rc.2. ([#293](https://github.com/Fei2411/DeepSeek-Bot/pull/293))
+- In the Chinese interface the team workspace is called 总工作区. ([#364](https://github.com/Fei2411/DeepSeek-Bot/issues/364))
+- The reasoning above a Bot's answer starts folded; open it to read its last lines, which scroll for the rest. While the Bot thinks it shows **Thinking** with a running clock, afterwards how long the Bot thought. It stays right above the answer, under the turn's tool lines. ([#381](https://github.com/Fei2411/DeepSeek-Bot/pull/381), [#383](https://github.com/Fei2411/DeepSeek-Bot/pull/383), [#392](https://github.com/Fei2411/DeepSeek-Bot/pull/392))
+- A Bot exchange opens at the newest messages and follows new replies while you stay at the end. ([#370](https://github.com/Fei2411/DeepSeek-Bot/pull/370))
+- In a window narrower than 1024 px, choosing a conversation in the open sidebar closes the sidebar. ([#374](https://github.com/Fei2411/DeepSeek-Bot/pull/374))
+
+### Fixed
+
+- Opening a Bot's chat right after start no longer fails with a page error on slow machines. ([#333](https://github.com/Fei2411/DeepSeek-Bot/issues/333))
+- On Windows, a Bot's work is no longer lost now and then when another program reads DS Bot's files at the same moment, and a failed save while a Bot moves to a fresh part no longer stops DeepSeek Harness. ([#328](https://github.com/Fei2411/DeepSeek-Bot/pull/328))
+- A Bot no longer loses its waiting messages when DS Bot reloads or updates while the Bot moves to a fresh part of its chat. ([#280](https://github.com/Fei2411/DeepSeek-Bot/issues/280))
+- A Bot's post into a group chat shows at once, also while the group is busy. ([#310](https://github.com/Fei2411/DeepSeek-Bot/pull/310))
+- A group member that waits for your approval can be stopped from the group's details. ([#156](https://github.com/Fei2411/DeepSeek-Bot/issues/156))
+- Clicking permission presets quickly no longer makes the picker jump back to an older choice. ([#266](https://github.com/Fei2411/DeepSeek-Bot/issues/266))
+- The DS Bot whale and the return button keep their look when other plugins load or reload. ([#228](https://github.com/Fei2411/DeepSeek-Bot/issues/228))
+- Usage totals no longer miss calls when a Session list serves a cached projection watermark. ([#295](https://github.com/Fei2411/DeepSeek-Bot/pull/295))
+- Secret references in the arguments of a stdio MCP server are replaced with their values. ([#305](https://github.com/Fei2411/DeepSeek-Bot/pull/305))
+- Ids and names such as `__proto__` are treated as unknown everywhere instead of being read as an existing Bot or group. ([#290](https://github.com/Fei2411/DeepSeek-Bot/issues/290))
+- A Bot opened in another conversation view has a **Back to chat** button again, and your draft stays. ([#371](https://github.com/Fei2411/DeepSeek-Bot/pull/371))
+- Pending questions and key requests stay usable while the chat history loads, and keep what you were typing. ([#372](https://github.com/Fei2411/DeepSeek-Bot/pull/372))
+- Bot and group names with brackets no longer leave parts of the name in group messages, replayed requests or chat previews. ([#369](https://github.com/Fei2411/DeepSeek-Bot/pull/369))
+- An ordinary DSH session that tries the Bot question tool is told to use a question tool it has, or to ask in plain text. ([#368](https://github.com/Fei2411/DeepSeek-Bot/pull/368))
+- The **Connect plugins** button no longer shows a warning badge all the time. ([#381](https://github.com/Fei2411/DeepSeek-Bot/pull/381))
+
+### Known limitations
+
+- The desktop app is not signed: at the first start Windows SmartScreen warns, and macOS asks you to allow it in Privacy & Security, which needs an administrator password.
+- On macOS the desktop app's window keeps the system title bar.
+- In Bot mode there is no **Sign out** for a DeepSeek account; sign out in classic Agent mode. ([#398](https://github.com/Fei2411/DeepSeek-Bot/issues/398))
+- When the desktop app's first-run copy puts the team in a new team workspace, each Bot that works in the team workspace goes on in a fresh part there first, so its first reply takes longer. ([#384](https://github.com/Fei2411/DeepSeek-Bot/issues/384))
+- Memory that group chats saved before this version stays in the members' own memory or the team memory. Delete it in the memory panel if a Bot outside the group should not read it. ([#300](https://github.com/Fei2411/DeepSeek-Bot/pull/300))
+
 ## [0.1.7] - 2026-10-16
 
 ### Added
@@ -211,7 +301,9 @@ If you used the legacy `dsh-bot` package, remove it before you install `ds-bot`.
 - Only one DSH can change a team at a time; a second DSH on the same DSH home opens it read-only ([Data and backups](ds-bot/README.md#data-and-backups)).
 - Group chats use many tokens: each member reads the group and answers in turn.
 
-[Unreleased]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.4...v0.1.5
