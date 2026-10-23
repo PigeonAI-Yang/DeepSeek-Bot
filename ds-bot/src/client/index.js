@@ -42,12 +42,13 @@ import { MEMBER_CSS, MemberDock } from './member-status.js'
 import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
 import { noticeApprovals } from './approval-notices.js'
 import { toolRuns, activeToolRecords, activeReplyPeer } from './tool-records.js'
+import { createPathActions, PATH_ACTIONS_CSS } from './path-actions.js'
 import { ImageContextMenu, IMAGE_MENU_CSS } from './image-menu.js'
 import { captureImageInput, IMAGE_PREVIEW_CSS } from './image-preview.js'
 import { conversationImages, earlierImagePage } from './image-gallery.js'
 import { listedOpener } from './open-listed.js'
 
-export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout']
+export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout', 'remote', 'remote.session', 'remote.workspaceFiles', 'remote.goals']
 
 export function apply(ctx) {
   ctx.effect(() => installLocale(ctx.get('locale')), 'ds-bot: interface copy')
@@ -615,7 +616,8 @@ export function apply(ctx) {
       },
     }
   }
-  const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, cards, heldCards, browserPages, browserTabs, surface, update } })
+  const pathActions = createPathActions(ctx.get('remote'))
+  const face = () => ({ actions, pathActions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, cards, heldCards, browserPages, browserTabs, surface, update } })
   const outputsByChat = new WeakMap()
   const outputSourceFor = sessionId => {
     const binding = ctx.sessions.binding(sessionId)
@@ -639,7 +641,7 @@ export function apply(ctx) {
             mediaSnapshot = nextMedia; mediaVersion = nextVersion
             snapshot = next
             cwd = nextCwd
-            value = mergeMediaOutputs(outputItems(next, { cwd }), nextMedia ?? [])
+            value = mergeMediaOutputs(outputItems(next, { cwd }), nextMedia ?? [], { newestFirst: true })
           }
           return value
         },
@@ -675,7 +677,7 @@ export function apply(ctx) {
     return {
       ...base,
       hooks: { ...base.hooks, outputs: outputSourceFor(sessionId), toolState: toolSourceFor(sessionId) },
-      actions: { ...actions, loadOutputImage, openOutputFile, loadEarlierOutputs, mediaJobs: () => mediaClient?.jobs(sessionId), loadMediaImage: item => mediaClient?.image({ sessionId, item }) },
+      actions: { ...actions, loadOutputImage, openOutputFile, loadEarlierOutputs, mediaJobs: () => mediaClient?.jobs(sessionId), mediaCapsuleProgress: () => mediaClient?.capsuleProgress?.(sessionId), loadMediaImage: item => mediaClient?.image({ sessionId, item }) },
     }
   }
   ctx.effect(() => noticeApprovals({
@@ -723,6 +725,7 @@ export function apply(ctx) {
             const tools = activeToolRecords(next)
             const background = (nextJobs?.rows?.[sessionId] ?? []).filter(job => job.owner === sessionId && (job.status === 'running' || job.status === 'stopping')).map(job => ({
               key: job.id, name: job.kind, args: {}, object: job.progress ? `${job.label} · ${job.progress}` : job.label,
+              label: job.label, progress: job.progress,
               at: job.startedAt, background: true, status: job.status,
             }))
             value = { runs: toolRuns(next), active: tools.length ? tools : background, background, peer: activeReplyPeer(next) }
@@ -879,7 +882,7 @@ export function apply(ctx) {
     () => installCompiledStyles(FEEDBACK_CSS, 'feedback'),
     () => installCompiledStyles(ABOUT_CSS, 'about'),
     () => installCompiledStyles(MEMBER_CSS, 'members'),
-    () => installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
+    () => installCompiledStyles(USER_MESSAGE_CSS + PATH_ACTIONS_CSS, 'user-messages'),
     () => installCompiledStyles(WIDGET_CSS, 'widgets'),
     browsers ? () => installCompiledStyles(BROWSER_CSS, 'browser') : null,
     () => installTheme(),
@@ -943,6 +946,7 @@ export function apply(ctx) {
     () => shadow('conversation.input.dock', { id: 'bot-question', order: -100, inject: face }, QuestionDock),
     () => shadow('conversation.input.dock', { id: 'bot-view', order: -95, inject: face }, WidgetDock),
     () => shadow('conversation.input.dock', { id: 'bot-secret', order: -90, inject: face }, SecretDock),
+    () => shadow('conversation.input.dock', { id: 'goal', order: 10, priority: BOT_PRIORITY }, Nothing),
   ]
   // The return button belongs to neither group: it renders only in Agent mode.
   ctx.effect(() => installCompiledStyles(RETURN_CSS, 'return'), 'ds-bot: return styles')

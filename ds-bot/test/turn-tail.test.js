@@ -47,7 +47,8 @@ const roster = { bots: [], byId: { b: { id: 'b', name: 'Writer' } }, roomsById: 
 const finished = { turn: 3, status: 'closed', end: { time: 2_000 } }
 function cellProps({ closingSeq = 10, turn = finished } = {}) {
   const asked = []
-  const links = { resolve: () => undefined }
+  const existing = { title: 'existing turn file' }
+  const links = { resolve: value => value === 'brief.md' ? existing : undefined }
   const props = {
     node: {
       key: 'n10',
@@ -71,7 +72,8 @@ const markdownOf = props => find(expand(AssistantCell(props), ['Bubbles', 'Bubbl
 test('a reply that closes its turn links the files the turn changed or delivered', () => {
   const { props, asked, links } = cellProps()
   const [markdown] = markdownOf(props)
-  assert.equal(markdown.props.fileMentions, links)
+  assert.equal(markdown.props.fileMentions.resolve('brief.md'), links.resolve('brief.md'))
+  assert.equal(markdown.props.fileMentions.resolve('unrelated.md'), undefined)
   assert.equal(asked.length, 1)
   assert.equal(asked[0].turn, finished)
   assert.equal(asked[0].seq, 10)
@@ -80,9 +82,9 @@ test('a reply that closes its turn links the files the turn changed or delivered
 
 test('a reply that does not close its turn, or one still running, links nothing', () => {
   const earlier = cellProps({ closingSeq: 12 })
-  assert.equal(markdownOf(earlier.props)[0].props.fileMentions, undefined)
+  assert.equal(markdownOf(earlier.props)[0].props.fileMentions.resolve('brief.md'), undefined)
   const running = cellProps({ turn: { turn: 3, status: 'open' } })
-  assert.equal(markdownOf(running.props)[0].props.fileMentions, undefined)
+  assert.equal(markdownOf(running.props)[0].props.fileMentions.resolve('brief.md'), undefined)
   assert.equal(earlier.asked.length + running.asked.length, 0)
 })
 

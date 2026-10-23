@@ -91,7 +91,7 @@ export function install(rt) {
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'autonomy-list', 'autonomy-get'])
+  const READS = new Set(['state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'autonomy-status', 'autonomy-list', 'autonomy-get'])
 
   function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -350,6 +350,7 @@ export function install(rt) {
         case 'memory-forget':
           await rt.load()
           return ok(await rt.memoryEndpoint(endpoint, body))
+        case 'autonomy-status':
         case 'autonomy-list':
         case 'autonomy-get':
         case 'autonomy-submit':
@@ -485,7 +486,15 @@ export function install(rt) {
     fetch: async (request) => {
       let body
       try { body = await request.json() } catch { body = {} }
-      const result = await handle(String(body?.endpoint ?? ''), body?.payload, request.signal)
+      let result
+      if (['autonomy-owner-resume-unstarted', 'autonomy-owner-dismiss-unstarted'].includes(body?.endpoint)) {
+        try {
+          await rt.load()
+          if (rt.readOnly() !== undefined) throw new Error(rt.readOnly())
+          const action = body.endpoint === 'autonomy-owner-dismiss-unstarted' ? rt.autonomyOwnerDismissUnstarted : rt.autonomyOwnerResumeUnstarted
+          result = ok(await action(body.payload, { signal: request.signal }))
+        } catch (error) { result = fail(String(error?.message ?? error), errorCode(error)) }
+      } else result = await handle(String(body?.endpoint ?? ''), body?.payload, request.signal)
       return new Response(JSON.stringify(result), { status: 200, headers: { 'content-type': 'application/json' } })
     },
   }), 'ds-bot: api route')

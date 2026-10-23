@@ -1,3 +1,6 @@
+import { ChatPathActions } from './path-actions.js'
+import { localPathSpans } from './text.js'
+import { messageImageRenderer } from './message-images.js'
 import { createElement as h, Fragment, useEffect, useRef, useState } from 'react'
 import * as ui from '@deepseek-ai/dsh-client-ui-primitives'
 import { mentionSpans } from '../shared/mentions.js'
@@ -51,11 +54,24 @@ export function userTextParts(text, bots, referenceLabels = []) {
   return parts
 }
 
-function UserText({ text, bots, referenceLabels, skillNames, references, actions }) {
+function UserText({ text, bots, referenceLabels, skillNames, references, actions, openFile }) {
+  const project = value => ui.projectUserText(value, referenceLabels, skillNames, 'skill', references)
+  const paths = value => {
+    if (typeof openFile !== 'function') return project(value)
+    const parts = []
+    let cursor = 0
+    for (const span of localPathSpans(value)) {
+      parts.push(project(value.slice(cursor, span.start)))
+      parts.push(h('button', { key: span.start, type: 'button', className: 'bt-inline-path', 'data-bt-path': span.path, title: span.path, onClick: () => openFile(span.path) }, span.text))
+      cursor = span.end
+    }
+    parts.push(project(value.slice(cursor)))
+    return parts
+  }
   return userTextParts(text, bots, referenceLabels).map((part, index) => (part.bot
     ? h('button', { key: index, type: 'button', className: 'bt-umention', title: `@${part.bot.name}`, onClick: () => actions.openSession(part.bot.id) },
       h(BotMark, { bot: part.bot, size: 16 }), part.label)
-    : h(Fragment, { key: index }, ui.projectUserText(part.text, referenceLabels, skillNames, 'skill', references))))
+    : h(Fragment, { key: index }, paths(part.text))))
 }
 
 function Attachments({ attachments, renderMessageImages }) {
@@ -83,7 +99,7 @@ function CopyButton({ text }) {
 const clock = time => (typeof time === 'number' ? new Date(time).toLocaleTimeString(dateLocale(), { hour: 'numeric', minute: '2-digit' }) : undefined)
 
 // A sent message, or one that joined a running turn ("steering").
-export function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageImages, openFile, openSkill }) {
+export function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageImages, renderFactorySlot, loadImage, openFile, openSkill, pathActions }) {
   const roster = useRoster(value => value)
   const data = node.data ?? {}
   const { text, attachments, rest } = contentParts(data.content)
@@ -92,7 +108,7 @@ export function UserMessageCell({ node, sessionId, useRoster, actions, renderMes
   const steering = node.kind === 'steering'
   const groupTime = roster.roomsById?.[sessionId] && Number.isFinite(data.time) ? messageClock(data.time) : undefined
   const { shown, folded, control } = useFold(text, { markdown: false })
-  const body = h(UserText, { text: shown, bots: mentionableBots(roster, sessionId), referenceLabels, skillNames: data.skillNames ?? [], references, actions })
+  const body = h(ChatPathActions, { openFile, pathActions, sessionId }, h(UserText, { text: shown, bots: mentionableBots(roster, sessionId), referenceLabels, skillNames: data.skillNames ?? [], references, actions, openFile }))
   const row = useRef(null)
   // Touch has no hover: a tap on the bubble opens its copy tool, a tap elsewhere closes it.
   const [toolsOpen, setToolsOpen] = useState(false)
@@ -109,7 +125,7 @@ export function UserMessageCell({ node, sessionId, useRoster, actions, renderMes
   }
   return h('div', { ref: row, className: 'bt-umsg', 'data-steering': steering || undefined },
     h('div', { className: 'bt-ustack' },
-      attachments.length > 0 ? h(Attachments, { attachments, renderMessageImages }) : null,
+      attachments.length > 0 ? h(Attachments, { attachments, renderMessageImages: messageImageRenderer({ renderMessageImages, renderFactorySlot, loadImage }) }) : null,
       text !== '' || rest.length > 0 ? h('div', { className: 'bt-ubody', title: clock(data.time), 'data-folded': folded || undefined, onClick: tapTools },
         control ? h('div', { className: 'bt-fold-body' }, body) : body,
         control,
@@ -123,6 +139,7 @@ export const USER_MESSAGE_CSS = `
 .bt-umsg{display:flex;flex-direction:row-reverse;align-items:center;justify-content:flex-start;gap:4px;padding-block:32px}
 .bt-ustack{min-width:0;max-width:calc(var(--bt-msg-w) * 100%);display:flex;flex-direction:column;align-items:flex-end;gap:8px}
 .bt-ubody{max-width:100%;box-sizing:border-box;background:var(--bt-chat-user-bg);color:var(--bt-ink);box-shadow:inset 0 0 0 .5px var(--bt-line);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 8px);white-space:pre-wrap;word-break:break-word}
+.bt-inline-path{display:inline;border:0;padding:0;background:none;color:inherit;font:inherit;text-align:inherit;cursor:pointer;white-space:inherit;user-select:text;text-decoration:underline;text-underline-offset:2px}
 .bt-ubody a{color:inherit}
 .bt-umention{display:inline-flex;align-items:center;gap:3px;vertical-align:-3px;max-width:100%;padding:0 1px;border:0;background:none;color:inherit;font:inherit;font-weight:600;line-height:inherit;cursor:pointer;border-radius:6px;white-space:nowrap}
 .bt-umention:hover{text-decoration:underline;text-underline-offset:2px}

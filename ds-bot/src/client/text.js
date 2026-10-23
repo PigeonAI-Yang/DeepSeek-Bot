@@ -1,3 +1,4 @@
+import { localFilePath } from './file-paths.js'
 // -------------------------------------------------------------------------
 // Text helpers
 import { dateLocale, t } from './i18n.js'
@@ -549,4 +550,49 @@ export function runStatsOf(values) {
     })
   }
   return shown
+}
+
+
+export function localPathSpans(text) {
+  const spans = []
+  for (let cursor = 0; cursor < text.length;) {
+    if (cursor === 0 || text[cursor - 1] === '\n' || text[cursor - 1] === '\r') {
+      const opening = fenceOpening(text, cursor)
+      if (opening) { cursor = skipFence(text, opening); continue }
+      if (/^(?: {4}|\t)/.test(text.slice(cursor))) {
+        const end = text.indexOf('\n', cursor)
+        cursor = end < 0 ? text.length : end + 1
+        continue
+      }
+    }
+    if (text[cursor] === '`') {
+      const openingEnd = backtickRunEnd(text, cursor)
+      const end = inlineCodeEnd(text, cursor, openingEnd)
+      cursor = end < 0 ? openingEnd : end
+      continue
+    }
+    if (text[cursor] === '[') {
+      const link = parseLink(text, cursor)
+      if (link) { cursor = link.end; continue }
+    }
+    if (cursor > 0 && /[\p{L}\d_:/\\@.=+\-]/u.test(text[cursor - 1])) { cursor += 1; continue }
+    const match = /^(?:"[a-z]:[\\/][^"\r\n]+"|'[a-z]:[\\/][^'\r\n]+'|[a-z]:[\\/][^\s<>"'`，。；！？、）】]+)(?=$|[\s，。；！？、）】])/i.exec(text.slice(cursor))
+    if (!match) { cursor += 1; continue }
+    const value = match[0].replace(/[),.!]+$/, '')
+    const path = localFilePath(value)
+    if (path !== null) spans.push({ start: cursor, end: cursor + value.length, path, text: value })
+    cursor += match[0].length
+  }
+  return spans
+}
+
+export function linkLocalPaths(text) {
+  let output = ''
+  let copied = 0
+  for (const span of localPathSpans(text)) {
+    const label = span.text.replace(/[\\[\]]/g, '\\$&')
+    output += text.slice(copied, span.start) + `[${label}](<${span.path.replace(/\\/g, '/')}>)`
+    copied = span.end
+  }
+  return copied === 0 ? text : output + text.slice(copied)
 }

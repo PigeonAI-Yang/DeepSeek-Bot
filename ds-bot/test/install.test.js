@@ -43,6 +43,10 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'on session/event',
     'effect ds-bot: agent tool restrict retry',
     'on agent/created',
+    'effect ds-bot: curated image recipes',
+    'prompt curated-image-recipes 641',
+    'effect ds-bot: custom Comfy observation',
+    'prompt comfy-observation 642',
     'effect ds-bot: identity section',
     'prompt bot-identity 640',
     'on agent/pre-step (prepend)',
@@ -119,6 +123,7 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'route POST /api/bot',
     'effect ds-bot: load state',
     'effect ds-bot: autonomy host',
+    'tool image_source_list',
   ])
 })
 
@@ -200,7 +205,8 @@ test('in the Desktop profile read_browser reads through the window', async (t) =
   const { ctx, call, stop } = start(TEAM, { services: { profileContext: { name: 'desktop' } } })
   t.after(stop)
   const tools = ctx.calls.filter(entry => entry.startsWith('tool '))
-  assert.equal(tools.at(-1), 'tool observe_resident_service')
+  assert.equal(tools.at(-1), 'tool image_source_list')
+  assert.ok(tools.includes('tool observe_resident_service'))
   assert.ok(tools.includes('tool read_browser'))
   assert.ok(ctx.calls.indexOf('effect ds-bot: browser channel') < ctx.calls.indexOf('effect ds-bot: api route'))
   const read = args => ctx.registeredTools.get('read_browser').execute(args, { agent: { id: 'b2' } })

@@ -246,7 +246,7 @@ export function OutputsCard({ sessionId, useOutputs, useSession, actions, dock, 
     ...dock?.styleFor('outputs'),
   }
   const toggleButton = h('button', {
-    type: 'button', className: 'bt-outputs-toggle',
+    type: 'button', className: 'bt-outputs-toggle bt-media-progress-surface',
     'aria-expanded': visible,
     'aria-label': t('Outputs ({count})', { count: items.length }),
     title: t('Outputs ({count})', { count: items.length }),
@@ -256,6 +256,7 @@ export function OutputsCard({ sessionId, useOutputs, useSession, actions, dock, 
   },
   h('span', { className: 'bt-outputs-label-icon', 'aria-hidden': true }, h(FolderIcon)),
   h('span', { className: 'bt-outputs-count', 'aria-hidden': true }, String(items.length)),
+  actions.mediaCapsuleProgress?.(),
   h('span', { className: 'bt-outputs-caret', 'data-open': visible ? '' : undefined, 'aria-hidden': true }, h(ArrowDownIcon)))
 
   const body = (mounted || embedded) ? h('div', { className: 'bt-outputs-body', 'data-open': visible ? '' : undefined, inert: visible ? undefined : '' },

@@ -1,3 +1,4 @@
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import { outputItems } from '../client/output-items.js'
 
 export function install(rt) {
@@ -52,5 +53,46 @@ export function install(rt) {
     if (latest.botId !== original.botId || latest.roomId !== original.roomId) throw new Error('Conversation changed')
     return { data: Buffer.from(read.data), name: item.name, provenance: { kind: 'session-workspace-file', ...locator, version: read.version, sourceAvailability: 'retained-workspace-original' } }
   }
+  rt.ctx.tools.register(defineTool({
+    name: 'image_source_list',
+    description: 'Find exact usable image locators already in your current conversation. Lists image attachments and workspace image cards with names and event sequences. Use the returned locator unchanged as source/reference; an image hash or local path is not an attachmentId. Optional query matches image names/paths. No file reads, registration, upload or generation.',
+    parameters: { query: { type: 'string', description: 'Optional case-insensitive image name or path fragment' } },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute(args, exec) {
+      const sessionId = exec.agent?.session?.id
+      const original = await current(sessionId)
+      const agent = await rt.resolveAgent(sessionId)
+      if (agent.id !== exec.agent.id) throw new Error('The current Bot agent is required')
+      const sources = new Map()
+      const query = (args.query ?? '').toLowerCase()
+      const add = source => {
+        if (query && !`${source.name} ${source.path ?? ''}`.toLowerCase().includes(query)) return
+        const key = JSON.stringify(source.locator)
+        if (!sources.has(key)) sources.set(key, source)
+      }
+      const events = agent.session.snapshotEvents().slice().sort((a, b) => b.seq - a.seq)
+      for (const event of events) {
+        if (event.type === 'assistant/message') {
+          const node = { kind: 'assistant-step', anchorSeq: event.seq, data: { blocks: event.data.message.content, finalNode: { seq: event.seq } } }
+          for (const item of outputItems({ nodes: new Map([['source', node]]) }, { cwd: agent.session.header.cwd })) {
+            if (item.kind === 'image' && item.path && item.sourceLocator) add({ name: item.name, path: item.path, eventSeq: event.seq, locator: { sourceLocator: item.sourceLocator } })
+          }
+        }
+        const visit = value => {
+          if (!value || typeof value !== 'object') return
+          if (typeof value.attachmentId === 'string' && value.mediaType?.startsWith?.('image/') && Number.isInteger(value.width) && Number.isInteger(value.height)) {
+            add({ name: value.name || 'image', eventSeq: event.seq, width: value.width, height: value.height, locator: { attachmentId: value.attachmentId } })
+            return
+          }
+          for (const child of Object.values(value)) visit(child)
+        }
+        visit(event.data)
+      }
+      const latest = await current(sessionId)
+      if (latest.botId !== original.botId || latest.roomId !== original.roomId) throw new Error('Conversation changed')
+      const all = [...sources.values()]
+      return JSON.stringify({ sources: all.slice(0, 40), hasMore: all.length > 40 })
+    },
+  }))
   rt.ctx.provide('dsBotMediaHost', Object.freeze({ version: 1, owner, current, attachment, workspaceSource }))
 }

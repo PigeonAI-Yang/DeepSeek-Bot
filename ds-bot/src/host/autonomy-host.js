@@ -1,4 +1,5 @@
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 // Narrow adapter for the optional ds-bot-autonomy package. The package receives
 // snapshots and operations here, never the DS Bot runtime or its mutable maps.
 export function install(rt) {
@@ -110,10 +111,53 @@ export function install(rt) {
     return () => { if (extension === next) extension = undefined }
   }
   const invoke = (name, ...args) => extension?.[name]?.(...args)
-  const service = Object.freeze({ version: 1, ready, writable, target, owner, resolve, deliver, readDelivery, attach })
+  ctx.inject?.(['goals'], scope => {
+    const goals = scope.goals
+    const original = goals.resume
+    function resume(agent, ref) {
+      const invocation = this.ctx?.invocation
+      if (invocation?.service === 'goals' && invocation.request?.namespace === 'goals'
+        && invocation.request?.method === 'resume' && owner(agent?.id)) {
+        if (invocation.peer?.principal?.kind !== 'owner' || invocation.signal.aborted) throw new RemoteError('bot/refused', 'Only the current owner can resume this autonomous task', {})
+        const result = invoke('resumeNativeGoal', agent, ref, {
+          signal: invocation.signal,
+          resume: (nextRef = ref) => Reflect.apply(original, this, [agent, nextRef]),
+        })
+        if (result !== undefined) return Promise.resolve(result).catch(error => {
+          if (error?.isDSHRemoteError) throw error
+          throw new RemoteError('bot/refused', String(error?.message ?? error), {}, { cause: error })
+        })
+      }
+      return Reflect.apply(original, this, [agent, ref])
+    }
+    goals.resume = resume
+    scope.effect(() => () => { if (goals.resume === resume) goals.resume = original }, 'ds-bot: native Goal resume')
+  })
+  const question = (snapshot, id) => {
+    const current = assertCurrent(snapshot)
+    const saved = state.questions[current.sessionId]
+    return saved?.id === id ? structuredClone(saved) : undefined
+  }
+  const closeQuestion = async (snapshot, id) => {
+    const current = assertCurrent(snapshot)
+    if (state.questions[current.sessionId]?.id !== id) return
+    delete state.questions[current.sessionId]
+    await rt.save()
+  }
+  const pendingQuestion = snapshot => Boolean(state.questions[assertCurrent(snapshot).sessionId])
+  const service = Object.freeze({ version: 1, ready, writable, target, owner, resolve, deliver, readDelivery, attach, question, closeQuestion, pendingQuestion })
 
   Object.assign(rt, {
+    autonomyOwnerResumeUnstarted: (...args) => {
+      if (typeof extension?.resumeUnstartedFromOwner !== 'function') throw new Error('DS Bot autonomy is not available')
+      return invoke('resumeUnstartedFromOwner', ...args)
+    },
+    autonomyOwnerDismissUnstarted: (...args) => {
+      if (typeof extension?.dismissUnstartedFromOwner !== 'function') throw new Error('DS Bot autonomy is not available')
+      return invoke('dismissUnstartedFromOwner', ...args)
+    },
     autonomyBeforeStop: (...args) => invoke('beforeStop', ...args),
+    autonomyOwnsQuestion: (sessionId, id) => invoke('ownsQuestion', sessionId, id) === true,
     autonomyQuestionOpened: (...args) => invoke('questionOpened', ...args),
     autonomyQuestionAnswered: (...args) => invoke('questionAnswered', ...args),
     autonomyClaimTurnResult: (...args) => invoke('claimTurnResult', ...args) === true,

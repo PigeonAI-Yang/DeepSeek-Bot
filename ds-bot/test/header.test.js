@@ -52,7 +52,7 @@ const sideButton = (node) => {
   return null
 }
 
-const pillOf = node => node?.props?.className === 'bt-pill' ? node : (node?.children ?? []).map(pillOf).find(Boolean)
+const pillOf = node => node?.props?.className?.split(' ').includes('bt-pill') ? node : (node?.children ?? []).map(pillOf).find(Boolean)
 
 // 公开#456: the Bot header carries no right-sidebar toggle — the drawer and the
 // column never share the window, and the way in sits in the drawer instead.

@@ -69,20 +69,4 @@ if (!(Test-Path -LiteralPath $ApplicationPath -PathType Leaf)) {
     throw 'Installed DeepSeek Harness executable was not found.'
 }
 
-$running = Get-CimInstance -ClassName Win32_Process -Filter "Name='DeepSeek Harness.exe'" |
-    Where-Object {
-        $_.ExecutablePath -and [string]::Equals($_.ExecutablePath, $ApplicationPath, [StringComparison]::OrdinalIgnoreCase)
-    }
-
-if ($running) {
-    $message = '请先完全退出 DeepSeek Harness，再启动直连入口。'
-    Write-Output $message
-    try {
-        $shell = New-Object -ComObject WScript.Shell
-        $null = $shell.Popup($message, 0, 'DS Bot Direct', 48)
-    } catch {
-    }
-    exit 2
-}
-
-Start-Process -FilePath $ApplicationPath -WorkingDirectory $applicationDirectory -WindowStyle Hidden
+Start-Process -FilePath $ApplicationPath -WorkingDirectory $applicationDirectory -WindowStyle Normal

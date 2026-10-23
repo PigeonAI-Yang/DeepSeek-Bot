@@ -52,6 +52,17 @@ function MemoryNotice({ shown }) {
     h('span', { className: 'bt-pill-mem-in', ref: inner }, h('span', { className: 'bt-pill-mem-ico' }, h(MemoryIcon)), label))
 }
 
+function backgroundSummary(job) {
+  if (job.name !== 'image-edit') return `${job.key} · ${t(job.status === 'stopping' ? 'Stopping' : 'Running')}`
+  const phases = { validating:'Validating image',uploading:'Uploading image',submitting:'Submitting image',queued:'Image queued',running:'Running', 'loading-model':'Loading image model',encoding:'Encoding image',sampling:'Sampling image',decoding:'Decoding image',saving:'Saving image',collecting:'Collecting image',cancel_requested:'Stopping',connection_lost:'Image connection lost',submission_unknown:'Image submission unknown' }
+  const phase = job.progress?.split(' · ')[0]
+  const steps = job.progress?.match(/\b\d+\/\d+(?= steps\b)/)?.[0]
+  const percent = job.progress?.match(/\b\d+%/)?.[0]
+  return [t(job.label?.startsWith('Image generation') ? 'Image generation' : 'Image edit'),
+    `${t(job.status === 'stopping' ? 'Stopping' : phases[phase] ?? 'Running')}${steps ? ` ${steps}` : ''}`,percent,
+    job.progress?.endsWith('last observation') ? t('Last image observation') : undefined].filter(Boolean).join(' · ')
+}
+
 function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, useToolState, panelId, style, expanded, memberStatus = '', children }) {
   const liveKey = useLive(state => JSON.stringify(state[sessionId] ?? {}))
   const entries = useMemo(() => Object.entries(JSON.parse(liveKey)), [liveKey])
@@ -85,7 +96,7 @@ function RuntimeStatusPanel({ sessionId, bot, roster, running, useLive, useToolS
         h('div', { className: 'bt-runtime-row' },
           h('div', { className: 'bt-runtime-label' }, t('Background tasks')),
           h('div', { className: 'bt-runtime-value' }, background.length
-            ? background.map(job => h('div', { key: job.key }, `${job.name === 'image-edit' ? job.object || job.key : job.key} · ${t(job.status === 'stopping' ? 'Stopping' : 'Running')}`))
+            ? background.map(job => h('div', { key: job.key, title:job.object || job.key }, backgroundSummary(job)))
             : t('None'))),
         services.length > 0 ? h('div', { className: 'bt-runtime-row' },
           h('div', { className: 'bt-runtime-label' }, t('Resident services')),
@@ -387,7 +398,7 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
       },
     },
     h('button', {
-      type: 'button', className: 'bt-pill', 'aria-expanded': away ? undefined : dock.merged ? expanded : detailsOpen, 'data-memory': memoryNotice ? 'updated' : undefined,
+      type: 'button', className: 'bt-pill bt-media-progress-surface', 'aria-expanded': away ? undefined : dock.merged ? expanded : detailsOpen, 'data-memory': memoryNotice ? 'updated' : undefined,
       'aria-describedby': expanded ? panelId : undefined,
       title: away ? name : undefined,
       'aria-label': away ? t('Back to chat') : memoryNotice ? t("Memory updated. Open {name}'s memory", { name: roster.byId[changed]?.name ?? name }) : t('View conversation details'),
@@ -411,6 +422,7 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
       title: t('Outputs ({count})', { count: outputCount }),
       'aria-label': t('Outputs ({count})', { count: outputCount }),
     }, h('span', { className: 'bt-outputs-label-icon', 'aria-hidden': true }, h(FolderIcon)), String(outputCount)) : null,
+    dock.merged ? actions.mediaCapsuleProgress?.() : null,
     h('span', { className: 'bt-pill-go', 'aria-hidden': true }, h(GoArrow))),
     mounted && panelStyle ? h(RuntimeStatusPanel, { sessionId, bot, roster, running, useLive, useToolState, panelId, style: panelStyle, expanded, memberStatus },
       hasOutputs && dock.merged ? h(OutputsCard, { key: sessionId, sessionId, useOutputs, useSession, actions, embedded: true,

@@ -28,7 +28,8 @@ export function captureMediaDraft(sessions, conversation, sessionId, shownSessio
   }
 }
 
-export function mergeMediaOutputs(transcript, artifacts) {
+export function mergeMediaOutputs(transcript, artifacts, { newestFirst = false } = {}) {
+  if (newestFirst) return mergeMediaOutputs([...artifacts].sort((a, b) => (b.createdAt ?? b.seq ?? 0) - (a.createdAt ?? a.seq ?? 0)), transcript)
   const seen = new Set(transcript.map(item => item.artifactId ?? item.key))
   return [...transcript, ...artifacts.filter(item => {
     const key = item.artifactId ?? item.key

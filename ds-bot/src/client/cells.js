@@ -3,20 +3,22 @@ import { createPortal } from 'react-dom'
 import { DisclosureRow } from './dsh-primitives.js'
 import { MarkdownText } from './dsh-primitives.js'
 import { inkText } from './inks.js'
-import { linkMentions, normalizeWindowsMarkdownPaths, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts, elapsedLabel, clockLabel, messageClock } from './text.js'
+import { linkMentions, linkLocalPaths, normalizeWindowsMarkdownPaths, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts, elapsedLabel, clockLabel, messageClock } from './text.js'
 import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon, PlugIcon, ChevronRightIcon } from './icons.js'
 import { colorOf, toolState, BotMark, RoomAvatar } from './mark.js'
 import { SettledQuestion, PendingQuestion } from './questions.js'
 import { AnsweredReply, WidgetCell } from './widget-cell.js'
 import { SecretToolCell } from './secret-card.js'
-import { t } from './i18n.js'
+import { dateLocale, t } from './i18n.js'
 import { call } from './api.js'
 import { failureLabel } from './diagnostics.js'
 import { turnReasoning, thinkingStep, opensReply } from './turn-reasoning.js'
 import { workReplyText } from './work-reply.js'
 import { completedReasoningReply } from './reasoning-reply.js'
 import { imageInspections } from './image-inspections.js'
+import { messageImageRenderer } from './message-images.js'
 import { toolRecords, toolArgumentText, toolBatchStatus } from './tool-records.js'
+import { ChatPathActions, pathMentions } from './path-actions.js'
 import { FOLD_AT, FOLD_HUGE, stripLongNote, useFold } from './fold.js'
 import { noHover, useViewport, viewBottom } from './motion.js'
 import { heldCardKey } from './sources.js'
@@ -35,7 +37,7 @@ const mdLabels = () => ({ code: { copyLabel: t('Copy'), copiedLabel: t('Copied')
 // row, so it lines up with the bubble whether or not reactions hang below it.
 // `fold`: past what a bubble folds (fold.js); `whole`: the last text is only the start
 // of its message (see useFold).
-export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead, showTools = true, mentions, fold = FOLD_AT, whole }) {
+export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead, showTools = true, mentions, openFile, pathActions, fold = FOLD_AT, whole }) {
   const onClick = (event) => {
     const target = mentionTarget(event)
     if (target === null) return
@@ -48,7 +50,7 @@ export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, 
     texts.map((text, index) => {
       const last = index === texts.length - 1
       return h(Bubble, {
-        key: index, text, index, roster, selfId, actions, sessionId, msgKey, mentions, fold, showTools,
+        key: index, text, index, roster, selfId, actions, sessionId, msgKey, mentions, openFile, pathActions, fold, showTools,
         picked: msgKey ? reactions?.[index] ?? [] : [],
         live: streaming && last,
         lead: lead && last ? lead : null,
@@ -57,10 +59,10 @@ export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, 
     }))
 }
 
-function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, mentions, fold, showTools, picked, live, lead, whole }) {
+function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, mentions, openFile, pathActions, fold, showTools, picked, live, lead, whole }) {
   const { shown, folded, control } = useFold(text, { limit: fold, whole, live })
   const key = msgKey ? `${msgKey}:${index}` : undefined
-  const body = h(MarkdownText, { text: linkMentions(normalizeWindowsMarkdownPaths(shown), roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact', fileMentions: mentions })
+  const body = h(ChatPathActions, { openFile, pathActions, sessionId }, h(MarkdownText, { text: linkMentions(linkLocalPaths(normalizeWindowsMarkdownPaths(shown)), roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact', fileMentions: pathMentions(mentions, openFile) }))
   const row = useRef(null)
   // Touch has no hover: a tap on the bubble opens its tools, a tap elsewhere
   // closes them. Interactive targets keep their own meaning.
@@ -105,9 +107,13 @@ function useDismiss(open, close, refs) {
 
 // The hover toolbar beside a reply bubble: Add reaction, Reply, More. `open` is
 // the touch fallback: a tap on the bubble toggles it (see Bubble).
-function MessageTools({ text, name, sessionId, react, actions, open: tapped }) {
+function MessageTools({ text, name, sessionId, react, actions, open: tapped, time }) {
   // The anchor element is kept, not its rect: the visible viewport can move
   // (on-screen keyboard) while the popover is open.
+  const date = typeof time === 'number' ? new Date(time) : undefined
+  const timestamp = date && Number.isFinite(date.getTime()) ? date.toLocaleString(dateLocale(), {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }) : ''
   const [panel, setPanel] = useState(null)
   const [copied, setCopied] = useState(false)
   const tools = useRef(null)
@@ -140,6 +146,7 @@ function MessageTools({ text, name, sessionId, react, actions, open: tapped }) {
     react ? h('button', { type: 'button', className: 'bt-tool', 'aria-label': t('Add reaction'), title: t('Add reaction'), 'aria-expanded': panel?.kind === 'react', onClick: event => open('react', event) }, h(SmileIcon)) : null,
     sessionId ? h('button', { type: 'button', className: 'bt-tool', 'aria-label': t('Reply'), title: t('Reply'), onClick: () => actions.quote(sessionId, text) }, h(ReplyIcon)) : null,
     h('button', { type: 'button', className: 'bt-tool', 'aria-label': t('More message actions'), title: t('More'), 'aria-haspopup': 'menu', 'aria-expanded': panel?.kind === 'more', onClick: event => open('more', event) }, copied ? h(CheckIcon) : h(DotsIcon)),
+    timestamp ? h('time', { className: 'bt-message-time', dateTime: date.toISOString() }, timestamp) : null,
     panel?.kind === 'react' ? createPortal(h('div', { ref: pop, className: 'bt-react-strip', role: 'menu', 'aria-label': t('Reactions'), style: place },
       REACTIONS.map(emoji => h('button', { key: emoji, type: 'button', role: 'menuitem', 'aria-label': emoji, onClick: () => { close(); react(emoji) } }, emoji))), document.body) : null,
     panel?.kind === 'more' ? createPortal(h('div', { ref: pop, className: 'bt-menu', role: 'menu', 'aria-label': t('Message actions'), style: place },
@@ -236,7 +243,7 @@ function useFileMentions({ node, openFile, fileMentions, useTurnData }) {
   }, [fileMentions, openFile, seq, tail, turn])
 }
 
-export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, useTurnData, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
+export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, useTurnData, useRoster, useUi, useTurnSteps, useTurnContext, actions, renderMessageImages, renderFactorySlot, loadImage, pathActions }) {
   const roster = useRoster(value => value)
   const data = node.data
   const steps = useTurnSteps(String(data.turn))
@@ -244,6 +251,8 @@ export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentio
   const mentions = useFileMentions({ node, openFile, fileMentions, useTurnData })
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn)
   const texts = groupPart === 'reasoning' ? [] : data.blocks.filter(block => block.kind === 'text' && block.text.trim() !== '').map(block => block.text)
+  const images = groupPart === 'reasoning' ? [] : data.blocks.filter(block => block.kind === 'image').map(({ attachment }) => ({ attachment }))
+  const renderImages = messageImageRenderer({ renderMessageImages, renderFactorySlot, loadImage })
   const running = data.status === 'running'
   const members = steps.length ? steps : [data]
   const shown = thinkingShown(roster.prefs)
@@ -260,7 +269,7 @@ export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentio
   // DSH 0.2; the step that answers it shows the event line where it was read,
   // once, in the step's first cell.
   const relays = relayPart(data, groupPart) ? relaysBefore(contexts, steps, data) : []
-  if (texts.length === 0 && !reasoning && relays.length === 0) return null
+  if (texts.length === 0 && images.length === 0 && !reasoning && relays.length === 0) return null
   const selfId = roster.byId[sessionId]?.id ?? sessionId
   // The flat layout heads a reply with who speaks, once per Turn: in the step that opens
   // it, in that step's reasoning part when the reasoning shows there.
@@ -286,7 +295,8 @@ export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentio
       // time makes one Elapsed show settled + running.
       ...(thinking !== undefined ? { at: typeof thinking.time === 'number' ? thinking.time - (ms ?? 0) : undefined } : { ms }),
     }) : null,
-    texts.length ? h(Bubbles, { texts, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi, mentions, showTools: false, fold: FOLD_HUGE }) : null)
+    texts.length ? h(Bubbles, { texts, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi, mentions, openFile, pathActions, showTools: false, fold: FOLD_HUGE }) : null,
+    images.length && renderImages ? renderImages({ images, align: 'start' }) : null)
 }
 
 function EventLine({ prefix, bots, joiner = t('and'), onOpen, whole = false }) {
@@ -699,7 +709,7 @@ export function TurnTailCell({ turn: location, sessionId, useRoster, useTurnStep
     replied ? h(EventLine, { prefix: t('Replied to'), bots: [peer], whole: true, onOpen: bot => actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id) }) : null,
     fallback ? h(Bubbles, { texts: [fallback.text], roster, selfId: sessionId, actions, streaming: false, sessionId, msgKey, useUi, showTools: false }) : null,
     reply ? h(Fragment, null,
-      h(MessageTools, { text: reply, name: roster.byId[sessionId]?.name ?? t('Bot'), sessionId, react: emoji => actions.toggleReaction(msgKey, 0, emoji), actions }),
+      h(MessageTools, { text: reply, name: roster.byId[sessionId]?.name ?? t('Bot'), sessionId, react: emoji => actions.toggleReaction(msgKey, 0, emoji), actions, time }),
       picked.length ? h('div', { className: 'bt-reacts' }, picked.map(emoji => h('button', {
         key: emoji, type: 'button', className: 'bt-react', 'aria-label': t('Remove reaction {emoji}', { emoji }), onClick: () => actions.toggleReaction(msgKey, 0, emoji),
       }, emoji))) : null) : null,
@@ -1116,7 +1126,7 @@ function ImageInspectionCards({ root, renderMessageImages }) {
   return cards.length ? h(Fragment, null, ...cards) : null
 }
 
-export function ToolCell({ node, sessionId, useRoster, useUi, useWork, useHeldCards, useToolState, actions, renderMessageImages }) {
+export function ToolCell({ node, sessionId, useRoster, useUi, useWork, useHeldCards, useToolState, actions, renderMessageImages, renderFactorySlot, loadImage }) {
   const roster = useRoster(value => value)
   const heldCards = useHeldCards?.(state => state[sessionId])
   const root = node.data.root
@@ -1141,5 +1151,6 @@ export function ToolCell({ node, sessionId, useRoster, useUi, useWork, useHeldCa
   return h(Fragment, null,
     drawn.map((call, index) => h(Fragment, { key: call.callId ?? index }, renderCall(call, env))),
     h(GenericToolRecords, { root, records }),
-    images.length ? h(ImageInspectionCards, { root, renderMessageImages }) : null)
+    images.length ? h(ImageInspectionCards, { root, renderMessageImages: messageImageRenderer({ renderMessageImages, renderFactorySlot, loadImage }) }) : null)
 }
+

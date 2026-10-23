@@ -681,6 +681,8 @@ body[data-bt-layout=flat] .bt-msg,body[data-bt-layout=flat] .bt-astack[data-lead
 body[data-bt-layout=flat] .bt-bubble{background:none;padding:0;border-radius:0}
 body[data-bt-layout=flat] .bt-tools{top:-14px;right:0;left:auto;margin-left:0;transform:none;padding:2px;border-radius:999px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
 body[data-bt-layout=flat] .bt-tools::after{display:none}
+.bt-message-time{align-self:center;margin-left:8px;font-size:11px;line-height:24px;color:var(--bt-ink-2);white-space:nowrap;opacity:0;transition:opacity .12s ease;pointer-events:none}
+.bt-tools:hover>.bt-message-time,.bt-tools:focus-within>.bt-message-time{opacity:1}
 .bt-tool{width:24px;height:24px;border:0;padding:0;border-radius:6px;background:none;color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease,color .12s ease}
 .bt-tool:hover,.bt-tool[aria-expanded=true]{background:var(--bt-hover);color:var(--bt-ink)}
 .bt-tool:active{background:var(--bt-active)}

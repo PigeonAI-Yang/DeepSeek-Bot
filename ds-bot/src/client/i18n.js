@@ -5,6 +5,9 @@
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  'Resume autonomous task': '恢复自主任务', 'Resuming task…': '正在恢复…', 'Could not resume task': '任务恢复失败',
+  'Last image observation':'上次观测',
+  'Image edit':'图片修改', 'Image generation':'图片生成', 'Validating image':'检查中', 'Uploading image':'上传中', 'Submitting image':'提交中', 'Image queued':'排队中', 'Loading image model':'加载模型中', 'Encoding image':'编码中', 'Sampling image':'采样中', 'Decoding image':'解码中', 'Saving image':'保存中', 'Collecting image':'收集结果', 'Image connection lost':'连接中断', 'Image submission unknown':'提交待核对',
   // Shared
   'Main Bot': '主 Bot',
   Working: '工作中',
@@ -36,6 +39,12 @@ const ZH = {
   'Collapse reasoning': '收起思考过程',
   Copy: '复制',
   Copied: '已复制',
+  'File actions': '文件操作',
+  'Preview file': '预览文件',
+  'Open with': '打开方式',
+  'Show in folder': '在文件夹中显示',
+  'Copy path': '复制路径',
+  'The file action failed. Please try again.': '文件操作失败，请重试。',
   'Image actions': '图片操作',
   'Copy image': '复制图片',
   'Image copied': '图片已复制',

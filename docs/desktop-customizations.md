@@ -2,11 +2,15 @@
 
 This fork is [PigeonAI-Yang/DeepSeek-Bot](https://github.com/PigeonAI-Yang/DeepSeek-Bot). It keeps the Windows Desktop changes in the plugin source at `ds-bot/src/client`.
 
-The fork uses `ds-bot` package version `0.1.6`. The generated client is built from `ds-bot/src/client` with the existing `npm run build` workflow in `ds-bot/`.
+The fork uses `ds-bot` package version `0.2.1`. The generated client is built from `ds-bot/src/client` with the existing `npm run build` workflow in `ds-bot/`.
 
 ## Install this fork
 
-In DSH Desktop, enter `github:PigeonAI-Yang/DeepSeek-Bot#main&path:/ds-bot` as the plugin address. This uses the same GitHub package address format as the upstream README.
+The local maintenance checkout is `J:/PigeonYang/DeepSeek-Bot/repository`, on `chore/maintain-installed-0.2.1-20261024`. It includes the stable upstream 0.2.1 merge and the verified installation adaptations. Local commits are not published to GitHub.
+
+The running installation loads a separate copy at `J:/PigeonYang/DeepSeek-Bot/installed-plugin/ds-bot`. Editing or building this checkout does not update that copy. Deployment requires a separate authorized operation. The installed launcher and the existing data at `J:/dsh-bot/data` and `J:/dsh-bot/desktop-roaming` remain separate from source maintenance.
+
+The retained optional Goal compatibility source does not enable the rejected `ds-bot-autonomy` plugin or resume Goals.
 
 ## Desktop changes
 
@@ -33,7 +37,7 @@ The retry policy retries `EMPTY_RESPONSE`, `SERVER`, `TIMEOUT`, and `TRANSPORT` 
 
 ## Launch Desktop directly
 
-Fully quit DSH before using either launcher. The PowerShell script stops if the same executable path is already running and asks you to exit DSH. It does not close DSH for you.
+The launcher starts the GUI with a normal window. If DSH is already running, its supported single-instance path restores and focuses the existing window. The VBScript wrapper keeps the console hidden.
 
 Pass the full executable path to the PowerShell launcher:
 

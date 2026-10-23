@@ -38,6 +38,33 @@ const MAIN_RULES = [
   '- The team can have more than one Main Bot; list_bots marks them. They share these powers; message them only when your work overlaps theirs.',
 ].join('\n')
 
+export const UNIFIED_IMAGE_RULES = [
+  '## Native image tasks',
+  '- Prefer image_task_submit for generate, edit, variation, local-edit, outpaint, upscale and cutout. Submit one constrained intent with concrete business inputs; the program deterministically selects a fixed workflow. No recipe listing or graph construction is needed. image_recipe_list is optional discovery or troubleshooting.',
+  '- Assign one stable taskKey per intended task, retain it across transport retries and replay-same-key results. A deliberate second task uses a new key. edit uses instruction-oriented BF16; variation explicitly requests moderate whole-image variation. edit with a concrete selection is local-edit. Ask the unresolved business choice when intent is ambiguous; this is not a general semantic classifier.',
+  '- For an existing image, call image_source_list first and pass the matching returned locator unchanged as source or reference. Use query for a known image name/path. Workspace image cards already in this conversation can supply sourceLocator; do not guess attachmentId from a hash or ask the user to reupload an image that the list can resolve. If no match exists, ask for the missing source.',
+  '- source is the primary owned locator; reference is an optional second image for edit only. Local edits need an existing ready same-source selection, exact mask or user-provided integer rectangle; never guess coordinates or infer a mask from prose or colored annotations. A staged selection needs source.assetId from its retained sourceAssetId. Outpaint needs four concrete padding values. Return missing-input clarification instead of inventing fields.',
+  '- Preserve an explicit human model demand in requiredModel, including unknown names such as Turbo. It is an assertion, not a selector; never omit the demand or substitute another model. Upscale supports scale 2 only. Cutout and upscale take no instruction, seed or negativePrompt.',
+  '- Return the native receipt and continue chatting. The native controller owns progress and artifacts. Read image_job_status only for a concrete question or recovery; never poll in a chat-turn loop. Never automatically retry uncertain submission. Reconcile an uncertain attempt first; only explicit user retry authorization allows image_task_submit with a fresh taskKey and retryOf, without new-task fields. The original key keeps returning its original attempt.',
+  '- Report exact missing dependencies or endpoint errors. Do not switch models, recipes or custom graphs after a covered task fails. Advanced custom observation remains for uncovered user-authorized work.',
+].join('\n')
+
+export const CURATED_IMAGE_RULES = [
+  '## Native image recipes',
+  '- For generation, reference editing, selected-region editing, outpaint, 2x upscale and transparent cutout, prefer image_recipe_list then image_request_create then image_recipe_submit. Read the relevant family once per task or after a reported dependency change. Use the exact recipeId and recipeVersion, semantic source roles and only declared controls.',
+  '- The host owns the graph, models, retained inputs, progress and output artifact. Do not enumerate model folders, build a graph, open a browser or bind custom observation for a covered recipe. For a local edit, use an existing ready same-source selection, an exact grayscale mask locator or user-provided integer rectangle; never guess coordinates or derive a mask from a colored annotation.',
+  '- Return the native receipt and continue chatting. The existing native controller handles completion. Read status only for a concrete user question or recovery, never poll in a chat-turn loop. Never automatically retry an uncertain submission. An explicitly authorized retry needs retryOf, the original request and a fresh submissionKey.',
+  '- Compatibility and execution evidence are separate. Report a missing exact recipe dependency without substituting models or silently switching to a custom attempt. Use custom Comfy observation only for uncovered advanced work authorized by the user. General tools remain available.',
+].join('\n')
+
+export const COMFY_OBSERVATION_RULES = [
+  '## Custom Comfy workflow observation',
+  '- Before each custom ComfyUI submission from Python or pwsh, call comfy_observation_prepare with a fresh key and a short label. Preserve the arbitrary graph, polling and postprocessing. The tool only prepares observation and does not submit.',
+  '- Merge its submissionFields into your existing single /prompt payload. Preserve unrelated extra_data and reject existing conflicting prompt_id, client_id, dsh_observation_id or dsh_observation_token. Replace the old random client_id construction with the issued client_id; never open another WebSocket using it. Use the returned endpoint.',
+  '- Save the returned binding JSON for that submission. The plugin helper comfyart-dshbot/src/comfy_observation.py exports merge_submission_fields(payload, binding); it preserves the graph and rejects binding conflicts. One actual prompt needs one new binding. Repeating a prepare key returns the same binding and never authorizes resubmission. Never retry an uncertain /prompt POST automatically.',
+  '- The capsule observes this Comfy prompt only. Continue your existing final-image presentation and Python postprocessing. Stopping observation does not cancel generation. Do not attribute already submitted unbound jobs or claim their past progress.',
+].join('\n')
+
 export function install(rt) {
   const { ctx } = rt
 
@@ -64,6 +91,30 @@ export function install(rt) {
     }
     return ''
   }
+
+  ctx.effect(() => ctx.systemPrompt.section({
+    name: 'curated-image-recipes',
+    order: 641,
+    interpolate: false,
+    text: context => {
+      const agent = context?.agent
+      if (!agent || !rt.botOf(rt.selfOf(agent.id))) return ''
+      const names = new Set(ctx.tools.schemas(agent).map(tool => tool.name))
+      if (names.has('image_task_submit')) return UNIFIED_IMAGE_RULES + '\n\nAutomatic selection: image_task_submit({taskKey,intent:"select",source,target:{text}}) returns one native job immediately. After completion inspect its selection annotation and reuse the retained sourceAssetId plus selection.requestId for already authorized erase/move/local-edit with a new stable key. Text matches are a union, not a proven object count or spatial filter. A move requires explicit signed integer translation:{dx,dy} in oriented source pixels; ask for distance if missing. Never reacquire the image between selection and editing. Do not launch the next stage after user Stop or a conversation change. Erase/move accept no prompt, model or seed controls. Deterministic mask and fill recipes may be unavailable when exact dependencies are missing.' + (['image_batch_status','image_batch_select'].every(name=>names.has(name)) ? '\nFor 2-4 alternatives on generate/edit/variation/local-edit/outpaint add batch:{count:2|3|4}. Each stable candidate index has a separate native job and seed. Return the group receipt promptly. Read image_batch_status only for a user question or recovery. Preserve successes when a sibling fails; unknown attempts never authorize automatic retry. An explicit retry uses fresh taskKey and retryOf, or retryCandidate:{batchId,candidateIndex} only for an unadmitted slot. Select the requested successful candidate with image_batch_select({batchId,artifactId,expectedRevision}) using the current revision. Continue only by its returned accepted source:{artifactId} and a new taskKey; selection itself never generates. Cancel the group by cancelling every active admitted child with image_job_cancel. No automatic replacement, ranking, mixed prompt variants or seed changes on retry.' : '')
+      return ['image_recipe_list', 'image_request_create', 'image_recipe_submit'].every(name => names.has(name)) ? CURATED_IMAGE_RULES : ''
+    },
+  }), 'ds-bot: curated image recipes')
+
+  ctx.effect(() => ctx.systemPrompt.section({
+    name: 'comfy-observation',
+    order: 642,
+    interpolate: false,
+    text: context => {
+      const agent = context?.agent
+      if (!agent || !rt.botOf(rt.selfOf(agent.id))) return ''
+      return ctx.tools.schemas(agent).some(tool => tool.name === 'comfy_observation_prepare') ? COMFY_OBSERVATION_RULES : ''
+    },
+  }), 'ds-bot: custom Comfy observation')
 
   ctx.effect(() => ctx.systemPrompt.section({
     name: 'bot-identity',
