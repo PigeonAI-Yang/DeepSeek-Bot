@@ -112,6 +112,30 @@ function imageCallPaths(root) {
   return paths
 }
 
+// A tool result that carried an image keeps its attachment in `content` even after
+// the host appends `image/offload` for that seq: offloading marks the image so it is
+// no longer re-sent to the model, it does not delete the attachment. Reading the
+// tool result directly therefore recovers images the snapshot no longer surfaces as
+// mounted cells, which is what the outputs card must list.
+// Only successful results count: a failed call produced no output. Results whose
+// read_image argument is not a local path are skipped for the same reason
+// imageCallPaths rejects them.
+function offloadedImages(root) {
+  const found = []
+  visitCalls(root, call => {
+    if (!call || call.kind !== 'tool-result' || !successfulResult(call)) return
+    if (!Array.isArray(call.content)) return
+    const isReadImage = toolName(call) === 'read_image'
+    const readPath = isReadImage ? localPath(toolArgs(call).text('file_path')) : undefined
+    if (isReadImage && readPath === undefined) return
+    for (const block of call.content) {
+      if (block?.type !== 'image' || !block.attachment || typeof block.attachment !== 'object') continue
+      found.push({ attachment: block.attachment, path: readPath })
+    }
+  })
+  return found
+}
+
 function outputForNode(node, order, add, cwd) {
   const seq = Number.isFinite(node?.anchorSeq) ? node.anchorSeq : 0
   if (node?.kind === 'assistant-step') {
@@ -137,6 +161,13 @@ function outputForNode(node, order, add, cwd) {
     const path = paths.get(callId)
     if (!path || path.rejected) continue
     add(outputCandidate({ path: path.path, cwd, attachment: image.attachment, name: image.label, kind: 'image', seq, order: order.value++, source: 'read-image' }))
+  }
+
+  // Images carried by any successful tool result. This covers read_image results
+  // whose call path could not be resolved, and any other tool that returns an
+  // image, including results the host has already offloaded.
+  for (const image of offloadedImages(root)) {
+    add(outputCandidate({ path: image.path, cwd, attachment: image.attachment, kind: 'image', seq, order: order.value++, source: 'tool-image' }))
   }
 
   visitCalls(root, call => {

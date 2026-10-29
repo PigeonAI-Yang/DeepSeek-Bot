@@ -158,3 +158,31 @@ test('recomputes from the updated snapshot without exhausting unloaded history',
   assert.deepEqual(outputItems(before).map(item => item.path), ['./first.txt'])
   assert.deepEqual(outputItems(after).map(item => item.path), ['./second.txt', './first.txt'])
 })
+
+// The host appends `image/offload` for old images so they are no longer re-sent to
+// the model. The attachment survives on the tool result, so the outputs card must
+// still list it: offloading is not deletion.
+test('lists images from tool results the host has offloaded', () => {
+  const kept = { attachmentId: 'sha256:kept', mediaType: 'image/webp', name: 'leggings1_00001_.png' }
+  const generated = { attachmentId: 'sha256:generated', mediaType: 'image/png', name: 'render.png' }
+  const nodes = [
+    toolNode(125, result('call-read', 'read_image', { file_path: 'C:/out/leggings1_00001_.png' }, [image(kept)])),
+    toolNode(126, result('call-generate', 'run_code', { code: 'draw()' }, [image(generated)])),
+  ]
+
+  const items = outputItems(snapshot(nodes))
+  assert.deepEqual(items.map(item => item.name).sort(), ['leggings1_00001_.png', 'render.png'])
+  assert.deepEqual(items.map(item => item.kind), ['image', 'image'])
+  assert.strictEqual(items[0].attachment?.attachmentId, 'sha256:generated')
+})
+
+// A failed tool call produced no output, so its image must not reach the card.
+test('ignores images on failed tool results', () => {
+  const ignored = { attachmentId: 'sha256:ignored', mediaType: 'image/png', name: 'ignored.png' }
+  const nodes = [
+    toolNode(20, result('call-failed', 'run_code', {}, [image(ignored)], { isError: true })),
+    toolNode(21, result('call-error', 'run_code', {}, [image(ignored)], { error: 'boom' })),
+  ]
+
+  assert.deepEqual(outputItems(snapshot(nodes)), [])
+})

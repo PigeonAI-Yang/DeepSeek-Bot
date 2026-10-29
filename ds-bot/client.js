@@ -2741,6 +2741,21 @@ function imageCallPaths(root) {
   });
   return paths;
 }
+function offloadedImages(root) {
+  const found = [];
+  visitCalls(root, (call2) => {
+    if (!call2 || call2.kind !== "tool-result" || !successfulResult(call2)) return;
+    if (!Array.isArray(call2.content)) return;
+    const isReadImage = toolName(call2) === "read_image";
+    const readPath = isReadImage ? localPath(toolArgs(call2).text("file_path")) : void 0;
+    if (isReadImage && readPath === void 0) return;
+    for (const block of call2.content) {
+      if (block?.type !== "image" || !block.attachment || typeof block.attachment !== "object") continue;
+      found.push({ attachment: block.attachment, path: readPath });
+    }
+  });
+  return found;
+}
 function outputForNode(node, order, add, cwd) {
   const seq = Number.isFinite(node?.anchorSeq) ? node.anchorSeq : 0;
   if (node?.kind === "assistant-step") {
@@ -2765,6 +2780,9 @@ function outputForNode(node, order, add, cwd) {
     const path = paths.get(callId);
     if (!path || path.rejected) continue;
     add(outputCandidate({ path: path.path, cwd, attachment: image.attachment, name: image.label, kind: "image", seq, order: order.value++, source: "read-image" }));
+  }
+  for (const image of offloadedImages(root)) {
+    add(outputCandidate({ path: image.path, cwd, attachment: image.attachment, kind: "image", seq, order: order.value++, source: "tool-image" }));
   }
   visitCalls(root, (call2) => {
     if (!successfulResult(call2) || !FILE_OUTPUT_TOOLS.has(toolName(call2))) return;
