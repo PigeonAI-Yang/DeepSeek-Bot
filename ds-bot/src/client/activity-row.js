@@ -22,6 +22,11 @@ export { reducedMotion }
 export const rowVisible = ({ running, streaming, tools, relaying, bot, room, capsule = false, active = [], question }) =>
   capsule ? (running || active.length > 0 || question !== undefined) && (bot !== undefined || room !== undefined) : running && (!streaming || tools.length > 0) && !relaying && (bot !== undefined || room !== undefined)
 
+// A queued message waits for the next turn, so only a transcript or steering
+// send counts as fresh input; a steer the host saw counts from when it landed.
+export const freshInputAt = (submissions, steeredAt) => Math.max(0, steeredAt ?? 0,
+  ...(submissions ?? []).filter(sub => sub.placement !== 'queued').map(sub => sub.time))
+
 // The shell's running slot can sit under wrappers it adds around the flow, so the
 // search is a descendant one; without the slot the row mounts at the flow's tail.
 // No flow at all is a mount failure, noted once per page — the observer keeps
@@ -90,10 +95,17 @@ export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useL
   if (!running) runAt.current = 0
   else if (runAt.current === 0) runAt.current = Date.now()
   const liveKey = useLive(state => JSON.stringify(state[sessionId] ?? {}))
-  const pendingInput = useSession(snapshot => Math.max(0, ...(snapshot?.pendingSubmissions ?? []).filter(sub => sub.placement !== 'queued').map(sub => sub.time)))
+  const steeredAt = useWork?.(work => work.steered?.[sessionId])
+  const pendingInput = useSession(snapshot => freshInputAt(snapshot?.pendingSubmissions, steeredAt))
   const bot = roster.byId[sessionId]
   const question = roster.questions?.[bot ? currentPart(bot) : sessionId]
   const room = roster.roomsById[sessionId]
+  // The one switch the row names: a working-folder move jumps the chat to a fresh
+  // part while a turn is not running, so without it the conversation just empties.
+  const moveAt = useWork?.((work) => {
+    const entry = bot === undefined ? undefined : work.bots?.[bot.id]
+    return entry?.switching === true && entry.folder === true && entry.roomId === undefined ? entry.since : 0
+  }) ?? 0
   const entries = useMemo(() => Object.values(JSON.parse(liveKey)), [liveKey])
   const streaming = entries.some(entry => entry.text)
   const active = useToolState(value => value.active)
@@ -101,13 +113,14 @@ export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useL
   const peerName = peer ? roster.byId[peer.id]?.name ?? peer.name ?? t('another Bot') : undefined
   const tools = active.length ? active.map(record => recordActivity(record, roster, { compact: true })) : entries.filter(entry => !entry.text).sort((a, b) => a.at - b.at).map(entry => ({ ...entry, label: t(entry.relay ? 'Coordinating with Bots' : 'Using tools') }))
   const relaying = tools.some(entry => entry.relay)
-  const visible = rowVisible({ running, streaming, tools, relaying, bot, room, capsule: true, active, question })
+  const visible = moveAt !== 0 || rowVisible({ running, streaming, tools, relaying, bot, room, capsule: true, active, question })
   const tool = tools.at(-1)
   const inputRef = useRef(0)
   const inputAt = Math.max(inputRef.current, pendingInput)
   inputRef.current = inputAt
   const want = !visible ? null
-    : question ? { key: 'question', label: t('Waiting for your answer'), state: 'alert' }
+    : moveAt !== 0 ? { key: 'move', label: t('Switching working folder'), state: 'thinking' }
+      : question ? { key: 'question', label: t('Waiting for your answer'), state: 'alert' }
       : streaming ? { key: 'replying', label: t('Generating a response'), state: 'working' }
       : relaying ? { key: 'relaying', label: tool?.label ?? t('Coordinating with Bots'), state: tool?.state ?? 'working' }
         : tool ? { key: `tool:${tool.label}:${tool.at}`, at: tool.at, label: tool.label ?? t('Using tools'), state: tool.state ?? 'working' }

@@ -41,6 +41,7 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'on credentials/reference-updated',
     'on settings/document-updated',
     'on session/event',
+    'on tools/execute',
     'effect ds-bot: agent tool restrict retry',
     'on agent/created',
     'effect ds-bot: curated image recipes',
@@ -56,13 +57,14 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'tool create_bot',
     'tool update_bot',
     'on tools/execute',
-    'tool list_models',
+    'tool list_bot_models',
     'tool create_group',
     'tool update_group',
     'tool delete_group',
     'tool post_to_group',
     'tool ask_user',
-    'tool show_view',
+    // show_view is scoped per Bot agent, not a global registration.
+
     'tools guard',
     'on agent/created',
     'on session/event',
@@ -81,6 +83,7 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'on agent/inbox/discarded',
     'on session/event',
     'effect ds-bot: resume interrupted turns',
+    'effect ds-bot: memory recovery',
     'effect ds-bot: memory section',
     'prompt bot-memory 645',
     'tool remember',
@@ -107,6 +110,8 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'effect ds-bot: connectors',
     'on agent/created',
     'effect ds-bot: capabilities',
+    'on agent/status',
+    'effect ds-bot: learning',
     'effect ds-bot: usage ledger',
     'on llm/stream',
     'effect ds-bot: update check',
@@ -216,7 +221,9 @@ test('in the Desktop profile read_browser reads through the window', async (t) =
   const poll = call('browser-wait', { clientId: 'w1', open: { b2: { url: 'https://example.com/', title: 'Example' }, nope: { url: 'https://x/' } } })
   await new Promise(resolve => setTimeout(resolve, 10))
   const reading = read({})
-  const requests = (await poll).value
+  const response = (await poll).value
+  const requests = response.requests
+  assert.deepEqual(response.holds, {})
   assert.deepEqual(requests.map(request => request.botId), ['b2'])
   assert.deepEqual((await call('browser-result', { id: requests[0].id, ok: true, page: { url: 'https://example.com/', title: 'Example', text: 'Hello from the page', items: [{ role: 'link', name: 'More', href: 'https://example.com/more' }] } })).value, true)
   const text = await reading
@@ -224,6 +231,20 @@ test('in the Desktop profile read_browser reads through the window', async (t) =
   assert.match(text, /Hello from the page/)
   assert.match(text, /\[1\] link "More" → https:\/\/example\.com\/more/)
   assert.equal((await call('state', {})).value.browser, true)
+})
+
+test('browser takeover and give-back are user-only and publish hold state', async t => {
+  const previous = process.env.DS_BOT_APP
+  process.env.DS_BOT_APP = '1'
+  t.after(() => { if (previous === undefined) delete process.env.DS_BOT_APP; else process.env.DS_BOT_APP = previous })
+  const { call, stop } = start(TEAM, { services: { profileContext: { name: 'ds-bot' } } })
+  t.after(stop)
+  await call('state')
+  assert.equal((await call('browser-takeover', { botId: 'b2' })).value, true)
+  const poll = (await call('browser-wait', { clientId: 'hold-window', open: {} })).value
+  assert.deepEqual(poll.holds.b2, { by: 'user', reason: 'takeover', note: 'The user is controlling this browser.' })
+  assert.equal((await call('browser-give-back', { botId: 'b2' })).value, true)
+  assert.deepEqual((await call('browser-wait', { clientId: 'hold-window', open: {} })).value.holds, {})
 })
 
 test('resident services appear and disappear on unchanged state replies through the registered tool', async t => {

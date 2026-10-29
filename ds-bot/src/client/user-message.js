@@ -138,7 +138,7 @@ export function UserMessageCell({ node, sessionId, useRoster, actions, renderMes
 export const USER_MESSAGE_CSS = `
 .bt-umsg{display:flex;flex-direction:row-reverse;align-items:center;justify-content:flex-start;gap:4px;padding-block:32px}
 .bt-ustack{min-width:0;max-width:calc(var(--bt-msg-w) * 100%);display:flex;flex-direction:column;align-items:flex-end;gap:8px}
-.bt-ubody{max-width:100%;box-sizing:border-box;background:var(--bt-chat-user-bg);color:var(--bt-ink);box-shadow:inset 0 0 0 .5px var(--bt-line);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 8px);white-space:pre-wrap;word-break:break-word}
+.bt-ubody{max-width:100%;box-sizing:border-box;background:var(--bt-chat-user-bg);color:var(--bt-ink);box-shadow:inset 0 0 0 .5px var(--bt-line);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 8px);white-space:pre-wrap;word-break:break-word;text-wrap:pretty}
 .bt-inline-path{display:inline;border:0;padding:0;background:none;color:inherit;font:inherit;text-align:inherit;cursor:pointer;white-space:inherit;user-select:text;text-decoration:underline;text-underline-offset:2px}
 .bt-ubody a{color:inherit}
 .bt-umention{display:inline-flex;align-items:center;gap:3px;vertical-align:-3px;max-width:100%;padding:0 1px;border:0;background:none;color:inherit;font:inherit;font-weight:600;line-height:inherit;cursor:pointer;border-radius:6px;white-space:nowrap}

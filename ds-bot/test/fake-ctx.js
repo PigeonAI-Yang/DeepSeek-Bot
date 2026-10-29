@@ -17,6 +17,17 @@ export function fakeAttachments() {
   }
 }
 
+export function fakeApproval(outcome = 'allowed-once') {
+  const requests = []
+  return {
+    requests,
+    async request(request) {
+      requests.push(request)
+      return typeof outcome === 'function' ? outcome(requests.length, request) : outcome
+    },
+  }
+}
+
 // A stand-in for the plugin context that records what apply() registers, in order,
 // without starting any service.
 export function fakeContext({ services = {} } = {}) {
@@ -45,6 +56,26 @@ export function fakeContext({ services = {} } = {}) {
     emit(name, payload) {
       for (const listener of listeners.get(name) ?? []) {
         if (listener.length < 2) listener(payload)
+      }
+    },
+    // emit, but waits for async listeners — for paths like agent/created whose
+    // work must finish before the test goes on.
+    async emitAsync(name, payload) {
+      for (const listener of listeners.get(name) ?? []) {
+        if (listener.length < 2) await listener(payload)
+      }
+    },
+    // An Agent handle for sessionId whose own tool scope feeds the same map the
+    // global registrations use — how agent.ctx.tools.register looks to the host.
+    scopeAgent(sessionId) {
+      return {
+        id: sessionId,
+        session: { id: sessionId },
+        ctx: {
+          tools: { register: (tool) => { registeredTools.set(tool.name, tool); return () => {} } },
+          effect: () => {},
+          on: () => () => {},
+        },
       }
     },
     effect(execute, label) {

@@ -128,29 +128,23 @@ export function install(rt) {
   // the fresh Session before the old one goes, so a failure leaves it where it was.
   async function moveSchedules(fromId, toId) {
     if (service === null) return
-    let records
-    try {
-      records = await service.list({ sessionId: fromId })
-    } catch (error) {
-      rt.warn('ds-bot: tasks of %s not moved: %s', fromId, error?.message ?? error)
-      return
-    }
+    const records = await service.list({ sessionId: fromId })
     for (const record of records) {
       const request = requestOf(record)
       if (request === null || (request.at !== undefined && Date.parse(request.at) <= Date.now())) continue
-      let moved
+      // A failed read or copy must prevent stopActivity from deleting an unmoved
+      // task. Equal requests can be separate tasks; copy each source record.
+      const moved = await service.create(toId, request)
       try {
-        moved = await service.create(toId, request)
         await rt.autonomyScheduleMoved?.({ fromSessionId: fromId, toSessionId: toId, oldId: record.id, newId: moved.id })
+      } catch (error) {
+        rt.warn('ds-bot: task binding for %s failed: %s', record.title, error?.message ?? error)
+      }
+      try {
         await service.delete({ sessionId: fromId, id: record.id })
       } catch (error) {
-        if (moved !== undefined) {
-          await Promise.resolve(rt.autonomyScheduleMoved?.({ fromSessionId: toId, toSessionId: fromId, oldId: moved.id, newId: record.id }))
-            .catch(rollbackError => rt.warn('ds-bot: task binding rollback for %s failed: %s', record.title, rollbackError))
-          await service.delete({ sessionId: toId, id: moved.id })
-            .catch(rollbackError => rt.warn('ds-bot: task rollback for %s failed: %s', record.title, rollbackError))
-        }
-        rt.warn('ds-bot: task %s stayed with the earlier part: %s', record.title, error?.message ?? error)
+        // The copy is safe; archiving the earlier part will remove its old task.
+        rt.warn('ds-bot: earlier copy of task %s not removed: %s', record.title, error?.message ?? error)
       }
     }
   }

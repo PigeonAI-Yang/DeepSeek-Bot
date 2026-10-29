@@ -1,9 +1,10 @@
 import { createElement as h, Fragment, useEffect, useRef, useState } from 'react'
 import { isMainOf } from './sources.js'
 import { HEADER, currentPart, runStatsOf, stripHeader, usageOf } from './text.js'
-import { PlusIcon, ShareIcon, CloseIcon, ChevronLeftIcon, GearIcon, TerminalIcon } from './icons.js'
+import { PlusIcon, ShareIcon, CloseIcon, ChevronLeftIcon, GearIcon } from './icons.js'
 import { botState, BotMark, BotAvatar } from './mark.js'
-import { GlobeIcon, Favicon } from './browser-pane.js'
+import { GlobeIcon, Favicon, PanelMenu, menuItemFor } from './browser-pane.js'
+import { drawerMenuKeys } from './side-model.js'
 import { useEscape } from './overlay-hooks.js'
 import { BotSettingsForm } from './bot-settings.js'
 import { GroupSettingsForm, ROOM_MODES, roomSubtitle, shownMode } from './group-settings.js'
@@ -12,7 +13,7 @@ import { FolderMenu } from './folder-menu.js'
 import { MemoryRow } from './memory-panel.js'
 import { ScheduleSummary } from './schedules.js'
 import { useGlide, useMorph } from './motion.js'
-import { MemberApprovals, MemberState, StopMemberWork, useMemberWork, workState } from './member-status.js'
+import { MemberApprovals, MemberState, StopMemberWork, StopRoomWork, useMemberWork, workState } from './member-status.js'
 import { PermissionPicker, presetDanger, presetName } from './permission-picker.js'
 import { t } from './i18n.js'
 
@@ -157,7 +158,9 @@ function GroupOverview({ room, roster, actions, usage, useWork, openSettings }) 
       ? h(About, { key: 'notice', title: 'Notice', text: room.notice })
       : h('button', { key: 'notice', type: 'button', className: 'bt-more', onClick: openSettings }, t('Add a notice in group settings')),
     h('div', { key: 'members' },
-      h('div', { className: 'bt-section-title' }, t('Members · {count}', { count: members.length })),
+      h('div', { className: 'bt-members-head' },
+        h('div', { className: 'bt-section-title' }, t('Members · {count}', { count: members.length })),
+        h(StopRoomWork, { room, entries, actions })),
       h('div', { className: 'bt-members', role: 'list' }, members.map(member => h(MemberRow, {
         key: member.id, member, entry: entries.find(item => item.id === member.id), room, roster, actions,
       })))),
@@ -218,14 +221,18 @@ export function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, ro
         bot ? h(BotSettingsForm, { bot, roster, actions, run }) : h(GroupSettingsForm, { room, roster, actions, run, onDeleted: close })),
     ]
   }
+  // The `···` button holds Browser, a new side chat, and DSH's right-column
+  // tabs; it hides when none of them applies.
+  const more = drawerMenuKeys({
+    bot: bot !== undefined,
+    room: room !== undefined,
+    canBrowse: bot !== undefined && roster.browser === true && actions.openBrowser !== undefined,
+    canTerminal: actions.canOpenTerminal?.() === true,
+    canFiles: actions.canOpenFiles?.() === true,
+  }).map(key => menuItemFor(key, actions, sessionId))
   const top = h('div', { className: 'bt-drawer-top', 'data-move': side },
     bot || room ? h('button', { type: 'button', className: 'bt-round', 'aria-label': bot ? t('Edit Bot') : t('Group settings'), title: bot ? t('Edit Bot') : t('Group settings'), 'data-info-row': 'settings', onClick: () => setView('settings') }, h(GearIcon)) : null,
-    bot && roster.browser === true && actions.openBrowser
-      ? h('button', { type: 'button', className: 'bt-round', 'aria-label': t('Open browser'), title: t("Open this Bot's browser"), onClick: () => actions.openBrowser(sessionId) }, h(GlobeIcon))
-      : null,
-    (bot || room) && actions.canOpenTerminal?.()
-      ? h('button', { type: 'button', className: 'bt-round', 'data-info-row': 'terminal', 'aria-label': t('New terminal'), title: t('New terminal'), onClick: () => actions.newTerminal() }, h(TerminalIcon))
-      : null,
+    more.length > 0 ? h('span', { 'data-info-row': 'more' }, h(PanelMenu, { items: more, className: 'bt-round', 'aria-label': t('More') })) : null,
     bot || room ? h('button', { type: 'button', className: 'bt-round', 'aria-label': copied ? t('Copied conversation') : t('Share conversation'), title: copied ? t('Copied') : t('Copy conversation as Markdown'), onClick: share }, copied ? h('span', { key: 'copied', className: 'bt-pop-in' }, '✓') : h(ShareIcon)) : null,
     hasStrip ? null : h('button', { type: 'button', className: 'bt-round', 'aria-label': t('Close details'), onClick: close }, h(CloseIcon)))
   if (!bot && !room) {
