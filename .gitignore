@@ -36,3 +36,7 @@ node_modules/
 
 # Bytecode from the record-browser-gif encoder's local media tests.
 __pycache__/
+
+# Electron binary cache (downloaded at build/runtime); never commit
+.electron-cache/
+

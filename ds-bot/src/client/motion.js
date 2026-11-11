@@ -26,7 +26,7 @@ export function useViewport() {
 
 // A damped spring (mass 1) sampled into a CSS linear() easing, for WAAPI glides
 // and CSS transitions alike.
-export function springEasing(stiffness, damping, samples = 25) {
+export function springEasing(stiffness, damping) {
   const w0 = Math.sqrt(stiffness)
   const zeta = damping / (2 * w0)
   const at = (t) => {
@@ -36,25 +36,27 @@ export function springEasing(stiffness, damping, samples = 25) {
   }
   let end = 0.05
   while (end < 2 && Math.abs(1 - at(end)) > 0.001) end += 0.01
-  const points = Array.from({ length: samples }, (_, index) => (index === samples - 1 ? 1 : at(end * index / (samples - 1))).toFixed(5))
+  const points = Array.from({ length: 25 }, (_, index) => (index === 24 ? 1 : at(end * index / 24)).toFixed(4))
   return { duration: Math.round(end * 1000), easing: `linear(${points.join(',')})`, stiffness, damping }
 }
 
 // The capsule's two springs: a gentle one (ω=20, ζ=0.78) reshapes surfaces, a
 // tighter one (ω=30, ζ=0.8) answers the press.
-export const SPRING_SHAPE = springEasing(400, 31.2, 121)
+export const SPRING_SHAPE = springEasing(400, 31.2)
 export const SPRING_TAP = springEasing(900, 48)
 // Rows of a list move to new places on ω=22, ζ=0.8.
 export const SPRING_LIST = springEasing(484, 35.2)
 // A looser spring (ω≈18, ζ≈0.56) that overshoots a little, for a surface that stretches
 // open, and a quicker one for a mark that pops in.
-export const SPRING_STRETCH = springEasing(320, 20, 121)
+export const SPRING_STRETCH = springEasing(320, 20)
 export const SPRING_POP = springEasing(500, 22)
 // A thumb's two edges: the one in front runs the fast spring (ω=28), the one behind
 // the slower one (ω=17), so the thumb stretches into the move and settles behind it
 // within about a quarter second.
 export const SPRING_LEAD = springEasing(784, 48.2)
 export const SPRING_TRAIL = springEasing(289, 29.2)
+// Critically damped layout glide (ω≈31.6, ζ=1) for sidebar row reordering.
+export const SPRING_GLIDE = springEasing(1000, 63)
 // A highlight that follows the keyboard and pointer down a list keeps up on stiffer
 // edges (ω=30 and ω=20).
 export const QUICK_EDGES = { lead: springEasing(900, 51), trail: springEasing(400, 34) }
@@ -67,35 +69,41 @@ export const spring = (curve, ...properties) => properties.map(property => `${pr
 // page delays the thumb instead of slowing it down.
 function liveSprings(apply) {
   const values = new Map()
+  const current = {}
   let frame = 0
   let last = 0
-  const read = () => Object.fromEntries([...values].map(([key, value]) => [key, value.x]))
   const step = (now) => {
     const dt = Math.min(0.5, Math.max(0.001, (now - last) / 1000))
     last = now
     const steps = Math.ceil(dt * 240)
     const h = dt / steps
     let moving = false
-    for (const value of values.values()) {
+    for (const [key, value] of values) {
       for (let index = 0; index < steps; index += 1) {
         value.v += (-value.k * (value.x - value.to) - value.c * value.v) * h
         value.x += value.v * h
       }
       if (Math.abs(value.x - value.to) < 0.05 && Math.abs(value.v) < 1) { value.x = value.to; value.v = 0 } else moving = true
+      current[key] = value.x
     }
-    apply(read())
+    apply(current)
     frame = moving ? requestAnimationFrame(step) : 0
   }
   return {
-    target: () => (values.size ? Object.fromEntries([...values].map(([key, value]) => [key, value.to])) : null),
+    target: () => {
+      if (!values.size) return null
+      const out = {}
+      for (const [key, value] of values) out[key] = value.to
+      return out
+    },
     set(targets, curves, jump) {
       for (const [key, to] of Object.entries(targets)) {
         const value = values.get(key)
         const { stiffness: k, damping: c } = curves[key]
-        if (!value || jump) values.set(key, { x: to, v: 0, to, k, c })
+        if (!value || jump) { values.set(key, { x: to, v: 0, to, k, c }); current[key] = to }
         else Object.assign(value, { to, k, c })
       }
-      if (jump) { cancelAnimationFrame(frame); frame = 0; apply(read()); return }
+      if (jump) { cancelAnimationFrame(frame); frame = 0; apply(current); return }
       if (!frame) { last = performance.now(); frame = requestAnimationFrame(step) }
     },
     stop: () => cancelAnimationFrame(frame),
@@ -232,39 +240,6 @@ export function useMorph(box, key) {
   useEffect(() => () => last.current.observer?.disconnect(), [])
 }
 
-export function useSurfaceMorph(box, key, expanded) {
-  const last = useRef({ node: null, key, rect: null, animation: null })
-  useLayoutEffect(() => {
-    const node = box.current
-    const state = last.current
-    if (!node) return
-    if (state.node !== node) {
-      state.animation?.cancel()
-      Object.assign(state, { node, key, rect: node.getBoundingClientRect(), animation: null })
-      return
-    }
-    if (state.key === key) return
-    const from = state.animation ? node.getBoundingClientRect() : state.rect
-    state.animation?.cancel()
-    state.animation = null
-    const to = node.getBoundingClientRect()
-    Object.assign(state, { key, rect: to })
-    if (!from || reducedMotion() || (Math.abs(from.width - to.width) < 1 && Math.abs(from.height - to.height) < 1)) return
-    const curve = expanded ? SPRING_STRETCH : SPRING_SHAPE
-    const animation = node.animate([
-      { width: `${from.width}px`, height: `${from.height}px` },
-      { width: `${to.width}px`, height: `${to.height}px` },
-    ], { duration: curve.duration, easing: curve.easing })
-    state.animation = animation
-    animation.onfinish = () => {
-      if (state.animation !== animation) return
-      state.animation = null
-      state.rect = node.getBoundingClientRect()
-    }
-  })
-  useEffect(() => () => last.current.animation?.cancel(), [])
-}
-
 // The last truthy `value` for `ms` after it turns falsy, so a closing layer can play its
 // exit; `leaving` is true meanwhile.
 export function useLinger(value, ms) {
@@ -275,4 +250,22 @@ export function useLinger(value, ms) {
     return () => clearTimeout(timer)
   }, [value])
   return [value || kept, !value && Boolean(kept)]
+}
+
+// Moves keyboard focus through enabled menu items on ArrowDown, ArrowUp, Home and End.
+export function stepMenuFocus(menu, event, trigger) {
+  if (!menu || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return false
+  const items = Array.from(menu.querySelectorAll('button[role^="menuitem"]:not(:disabled)'))
+  if (items.length === 0) return false
+  const target = document.activeElement
+  const current = items.indexOf(target)
+  if (current === -1 && target !== menu && target !== trigger) return false
+  event.preventDefault()
+  event.stopPropagation()
+  const next = event.key === 'Home' ? 0
+    : event.key === 'End' ? items.length - 1
+      : event.key === 'ArrowDown' ? (current + 1) % items.length
+        : (current <= 0 ? items.length - 1 : current - 1)
+  items[next]?.focus()
+  return true
 }

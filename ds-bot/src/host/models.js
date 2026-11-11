@@ -5,17 +5,62 @@ import { normalize, splitRef } from './text.js'
 
 const CATALOG_TTL_MS = 10_000
 const ROUTE_WAIT_MS = 30_000
+// The DeepSeek account's sign-in grant (dsh-deepseek-account-platform).
+const ACCOUNT_RECORD = 'deepseek-account-platform/default'
 
 export function install(rt) {
   const { ctx, state } = rt
 
   let modelsSynced = null
   let catalogCache = { at: 0, value: [] }
+  // Routes DSH serves that cannot answer a request at all — a hosted loop engine
+  // publishes one so its Sessions can be prompted. Once one refuses with
+  // HOSTED_ENGINE_ROUTE it is remembered with the models its provider served then,
+  // and nothing chooses it again until that provider serves different models.
+  const refused = new Map()
+  const answerable = entries => (refused.size === 0 ? entries : entries.filter(entry => !refused.has(entry.ref)))
+  // The models a ref's provider serves, as a string to compare; undefined when it
+  // cannot be listed, e.g. the provider is not registered.
+  async function servedModels(ref) {
+    try { return JSON.stringify(await ctx.llm.listModels(splitRef(ref).provider)) } catch { return undefined }
+  }
+  // An adapter update may have replaced a refused placeholder with a real route, which
+  // serves other models; the same models again are the same route, still refused.
+  async function forgetChangedRefusals() {
+    for (const [ref, served] of refused) {
+      const now = await servedModels(ref)
+      if (now !== undefined && now !== served) refused.delete(ref)
+    }
+  }
   // A model's thinking levels, resolved once and kept for a short while: they change
   // only with the provider, which also drops the catalog cache.
   const reasoningCache = new Map()
-  ctx.on?.('llm/adapters-updated', () => { catalogCache = { at: 0, value: [] }; reasoningCache.clear() })
-  for (const name of ['credentials/reference-updated', 'settings/document-updated']) ctx.on?.(name, () => { catalogCache = { at: 0, value: [] } })
+  const dropCatalog = () => { catalogCache = { at: 0, value: [] } }
+  // A key set or a sign-in may be the user's fix for a Bot's failed turn (turns.js); a
+  // key removed or a sign-out is not. A provider that registers or changes fixes
+  // nothing by itself: providers register late at every start.
+  ctx.on?.('llm/adapters-updated', () => { dropCatalog(); reasoningCache.clear(); return forgetChangedRefusals() })
+  ctx.on?.('credentials/reference-updated', async (ref) => {
+    dropCatalog()
+    if (await inPlace(credentials => credentials.describe(ref))) rt.unblockBots?.({ ref })
+  })
+  // A sign-in writes the account's record. A sign-out removes it, and so does a token
+  // the provider refused, while the turn that failed on it still runs. Other plugins'
+  // records (an OAuth token refresh) say nothing about the account.
+  ctx.on?.('credentials/record-updated', async (key) => {
+    dropCatalog()
+    if (String(key) !== ACCOUNT_RECORD) return
+    if (await inPlace(credentials => credentials.describeRecord(key))) rt.unblockBots?.({ signedIn: true })
+  })
+  ctx.on?.('settings/document-updated', dropCatalog)
+
+  // Whether a credential is there after a change. One that cannot be read counts as
+  // there, so a fix is not missed.
+  async function inPlace(describe) {
+    const credentials = ctx.get?.('credentials')
+    if (credentials === undefined) return true
+    try { return (await describe(credentials))?.configured !== false } catch { return true }
+  }
 
   // The thinking levels a model serves: `{efforts: [{id, name, description?}],
   // defaultEffort?}`, or undefined when it has none or the provider cannot say.
@@ -36,7 +81,7 @@ export function install(rt) {
   // that is about to be used asks for a `fresh` one. Entries for models a Bot uses
   // also carry their `reasoning`, so the picker can offer thinking levels.
   async function catalog({ fresh = false } = {}) {
-    if (!fresh && Date.now() - catalogCache.at < CATALOG_TTL_MS && catalogCache.value.length > 0) return catalogCache.value
+    if (!fresh && Date.now() - catalogCache.at < CATALOG_TTL_MS && catalogCache.value.length > 0) return answerable(catalogCache.value)
     const entries = []
     for (const provider of ctx.llm.listProviders()) {
       let models = []
@@ -56,31 +101,67 @@ export function install(rt) {
     // turn on them fails.
     const missing = await rt.missingKeys?.([...new Set(entries.map(entry => entry.provider))]) ?? new Set()
     for (const entry of entries) if (missing.has(entry.provider)) entry.needsKey = true
+    // A key can arrive without an event (an environment variable at the next start), so
+    // a provider listed with its key again lifts what its missing key blocked.
+    rt.unblockBots?.({ keyed: new Set(entries.filter(entry => !entry.needsKey).map(entry => entry.provider)) })
     const used = new Set(Object.values(state.bots ?? {}).flatMap(bot => [bot.model, bot.appliedModel].filter(Boolean)))
     await Promise.all(entries.filter(entry => used.has(entry.ref)).map(async (entry) => {
       const reasoning = await reasoningOf(entry.ref)
       if (reasoning !== undefined) entry.reasoning = reasoning
     }))
     catalogCache = { at: Date.now(), value: entries }
-    return entries
+    return answerable(entries)
   }
 
-  // The profile default model of DSH as set, served or not.
+  // The profile default model of DSH as set, served or not, and able to answer.
   const defaultRef = () => {
     const selection = ctx.get?.('agentDefaultModel')?.currentSelection?.()
-    return selection?.provider && selection?.model ? `${selection.provider}/${selection.model}` : undefined
+    if (!selection?.provider || !selection?.model) return undefined
+    const ref = `${selection.provider}/${selection.model}`
+    return refused.has(ref) ? undefined : ref
   }
-  // The profile default model of DSH, when it is served; else the first served model.
+  // A model whose provider has no key fails every turn, so no Bot is given one unasked.
+  const keyed = entries => entries.filter(entry => entry.needsKey !== true)
+  const isLocal = ref => rt.isLocalAgentRef?.(ref) === true
+  // Nor is a Bot given a local agent unasked: what it runs on changes only in its settings.
+  const usableOf = entries => keyed(entries).filter(entry => !isLocal(entry.ref))
+  // By the catalog as last listed, without waiting for a fresh one.
+  const isUsable = ref => keyed(catalogCache.value).some(entry => entry.ref === ref)
+  // The profile default model of DSH, when it is served and usable; else the first
+  // usable model; else none.
   function pickDefault(entries) {
+    const usable = usableOf(entries)
     const ref = defaultRef()
-    return entries.find(entry => entry.ref === ref)?.ref ?? entries[0]?.ref
+    // Neither a refused route nor one that fails for a missing key is picked.
+    const list = answerable(usable)
+    return list.find(entry => entry.ref === ref)?.ref ?? list[0]?.ref
   }
   const defaultModel = async () => pickDefault(await catalog())
 
+  // The model a create that names none starts on: the team's pick while the catalog
+  // still serves it, else the DSH default. A create fixes the ref then, so a later
+  // change of either default leaves the Bot alone.
+  const defaultBotModel = async () => {
+    const entries = await catalog()
+    const preferred = state.prefs.defaultBotModel
+    return !isLocal(preferred) && entries.some(entry => entry.ref === preferred) ? preferred : pickDefault(entries)
+  }
+
+  // A local agent's model, by its full ref only, so a short name never moves a Bot onto
+  // a CLI. Its CLI is asked only when DS Bot does not know the model yet.
+  async function resolveLocalModel(ref) {
+    const { provider, model } = splitRef(ref)
+    const known = await ctx.llm.listModels(provider).catch(() => [])
+    const served = known.some(entry => entry.id === model) ? known : await rt.localAgentModels(provider)
+    if (served.some(entry => entry.id === model)) return ref
+    throw new Error(`Model ${ref} is not available. Available models: ${served.map(entry => `${provider}/${entry.id}`).join(', ') || 'none'}`)
+  }
+
   // A full `provider/model` ref, or a model id or name that only one provider serves.
   async function resolveModel(text) {
-    const entries = await catalog({ fresh: true })
     const wanted = String(text ?? '').trim()
+    if (isLocal(wanted)) return resolveLocalModel(wanted)
+    const entries = (await catalog({ fresh: true })).filter(entry => !isLocal(entry.ref))
     const exact = entries.find(entry => entry.ref === wanted)
     if (exact) return exact.ref
     const key = normalize(wanted)
@@ -93,12 +174,15 @@ export function install(rt) {
   }
 
   // A Bot with no model yet waits for the user to pick one and changes nothing. A
-  // model that is no longer served falls back to the last one it ran on, then the default.
+  // model that is no longer served falls back to the last one it ran on, then the
+  // default; a fallback is never one that needs a key, nor a local agent. A local
+  // agent that is gone stays the Bot's: its turn fails with the repair card.
   async function desiredModel(bot) {
     if (!bot.model) return undefined
+    if (isLocal(bot.model)) return bot.model
     const entries = await catalog()
-    const served = new Set(entries.map(entry => entry.ref))
-    return [bot.model, bot.appliedModel].find(ref => ref && served.has(ref)) ?? pickDefault(entries)
+    if (entries.some(entry => entry.ref === bot.model)) return bot.model
+    return usableOf(entries).some(entry => entry.ref === bot.appliedModel) ? bot.appliedModel : pickDefault(entries)
   }
 
   // The thinking level a Bot asked for, when the model it runs on serves it; else the
@@ -137,6 +221,9 @@ export function install(rt) {
   // it. Selections run one at a time and wait for the write-back: profile writes land in
   // submission order, so the next one reads the user's default, not a Bot's.
   let selecting = Promise.resolve()
+  // Recheck group Sessions after every restart: Bot-level applied fields cannot
+  // prove that an older group Session received the member's thinking level.
+  const sessionSelections = new Map()
   function selectSessionModel(sessionId, { provider, model, reasoningEffort }) {
     const run = selecting.then(async () => {
       const defaults = ctx.get?.('agentDefaultModel')
@@ -149,6 +236,7 @@ export function install(rt) {
       if (before?.provider && before?.model && !sameSelection(before, saved)) {
         await defaults.saveSelection(before).catch(error => rt.warn('ds-bot: the default model was not restored: %s', error))
       }
+      sessionSelections.set(sessionId, { provider, model, reasoningEffort })
       return result
     })
     selecting = run.catch(() => {})
@@ -163,13 +251,16 @@ export function install(rt) {
     const ref = await desiredModel(bot)
     if (ref === undefined) return ref
     const effort = await desiredEffort(bot, ref)
-    if (!force && bot.appliedModel === ref && (bot.appliedEffort ?? undefined) === effort) return ref
+    const ownChanged = force || bot.appliedModel !== ref || (bot.appliedEffort ?? undefined) !== effort
     const route = { ...splitRef(ref), ...(effort === undefined ? {} : { reasoningEffort: effort }) }
-    await selectSessionModel(rt.chatOf(bot.id), route)
+    if (ownChanged) await selectSessionModel(rt.chatOf(bot.id), route)
     for (const sessionId of rt.groupSessionsOf(bot.id)) {
+      const applied = sessionSelections.get(sessionId)
+      if (!force && applied !== undefined && sameSelection(applied, route)) continue
       await selectSessionModel(sessionId, route)
         .catch(error => rt.warn('ds-bot: model for %s in a group not applied: %s', bot.name, error))
     }
+    if (!ownChanged) return ref
     bot.appliedModel = ref
     if (effort === undefined) delete bot.appliedEffort
     else bot.appliedEffort = effort
@@ -194,11 +285,11 @@ export function install(rt) {
     }
   }
 
-  // Sequential, and again whenever the served models change: a provider that
-  // registers late still gets its Bots' models selected.
+  // Sequential, and again whenever the answerable models change (a refused route is
+  // not one of them): a provider that registers late still gets its Bots' models selected.
   let syncedKey
   const syncModels = () => {
-    const key = catalogCache.value.map(entry => entry.ref).join(',')
+    const key = answerable(catalogCache.value).map(entry => entry.ref).join(',')
     if (key !== syncedKey) { syncedKey = key; modelsSynced = modelsSynced?.then(syncAll, syncAll) ?? syncAll() }
     return modelsSynced
   }
@@ -208,10 +299,32 @@ export function install(rt) {
     }
   }
 
+  // A route that refused a request for not being a model endpoint: it stays out of
+  // the catalog from now on, the Bots pinned to it move to what they would be given
+  // today, and each of them re-selects even when its record looks applied (`force`):
+  // its Session may still be on the route, or on another Bot's route in a group.
+  async function routeRefused(ref, bot) {
+    const served = await servedModels(ref)
+    if (!refused.has(ref)) {
+      refused.set(ref, served)
+      rt.warn('ds-bot: %s is not a model endpoint, so it is not chosen again', ref)
+      const entries = await catalog()
+      const pinned = Object.values(state.bots).filter(other => other.model === ref || other.appliedModel === ref)
+      for (const other of pinned) {
+        if (other.model === ref) other.model = pickDefault(entries)
+        if (other.appliedModel === ref) delete other.appliedModel
+      }
+      await rt.save()
+      for (const other of pinned) {
+        if (other !== bot) await applyModel(other, { force: true }).catch(error => rt.warn('ds-bot: model for %s not applied: %s', other.name, error))
+      }
+    }
+    if (bot !== undefined) await applyModel(bot, { force: true })
+  }
+
   Object.assign(rt, {
-    catalog, cachedCatalog: () => catalogCache.value, cachedDefault: () => pickDefault(catalogCache.value),
-    defaultRef, defaultModel, defaultEffort, resolveModel, desiredModel, reasoningOf, resolveEffort, desiredEffort,
-    selectSessionModel, applyModel, waitForModel, syncModels,
-    dropCatalog: () => { catalogCache = { at: 0, value: [] } },
+    catalog, cachedCatalog: () => answerable(catalogCache.value), cachedDefault: () => pickDefault(catalogCache.value),
+    defaultRef, defaultModel, defaultBotModel, defaultEffort, isUsable, resolveModel, desiredModel, reasoningOf, resolveEffort, desiredEffort,
+    selectSessionModel, applyModel, waitForModel, syncModels, routeRefused, dropCatalog,
   })
 }

@@ -1,5 +1,3 @@
-export const ANNOTATION_COLOR = '#ff4545'
-
 import { ACCENT_INKS, INKS, isHex, luminance } from './inks.js'
 import { SHAPES, markupCache, maskCache } from './characters.js'
 import { createSource } from './sources.js'

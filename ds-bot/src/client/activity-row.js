@@ -1,9 +1,10 @@
 import { createElement as h, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Shimmer, recordActivity } from './cells.js'
+import { createPortal } from 'react-dom'
+import { BotMark, RoomAvatar } from './mark.js'
+import { Elapsed, Shimmer, PHRASES } from './cells.js'
+import { noteClientError } from './diagnostics.js'
 import { reducedMotion } from './motion.js'
 import { t } from './i18n.js'
-import { noteClientError } from './diagnostics.js'
-import { currentPart } from './text.js'
 
 // -------------------------------------------------------------------------
 // The activity row: the Bot's mark and a shimmering phrase at the transcript
@@ -11,16 +12,13 @@ import { currentPart } from './text.js'
 // reply streams, and holds each phrase long enough to read.
 
 const PHRASE_HOLD_MS = 800
-export function elapsedLabel(ms) {
-  const minutes = Math.floor(ms / 60000)
-  if (minutes < 60) return `${Math.max(1, minutes)}m`
-  const hours = Math.floor(minutes / 60)
-  return minutes % 60 === 0 ? `${hours}h` : `${hours}h ${minutes % 60}m`
-}
+const drawPhrase = pool => t(pool[Math.min(pool.length - 1, Math.floor(Math.random() * pool.length))])
 export { reducedMotion }
 
-export const rowVisible = ({ running, streaming, tools, relaying, bot, room, capsule = false, active = [], question }) =>
-  capsule ? (running || active.length > 0 || question !== undefined) && (bot !== undefined || room !== undefined) : running && (!streaming || tools.length > 0) && !relaying && (bot !== undefined || room !== undefined)
+// A turn that streams text first and runs a tool after keeps its row once the
+// tool starts: streaming alone hides it, but running work must not.
+export const rowVisible = ({ running, streaming, tools, relaying, bot, room }) =>
+  running && (!streaming || tools.length > 0) && !relaying && (bot !== undefined || room !== undefined)
 
 // A queued message waits for the next turn, so only a transcript or steering
 // send counts as fresh input; a steer the host saw counts from when it landed.
@@ -42,6 +40,26 @@ export function findHost() {
   return node
 }
 
+function useRunningHost(active) {
+  const [host, setHost] = useState(null)
+  useEffect(() => {
+    if (!active) { setHost(null); return undefined }
+    let frame = 0
+    const find = () => {
+      frame = 0
+      setHost(prev => {
+        const node = findHost()
+        return prev === node ? prev : node
+      })
+    }
+    const observer = new MutationObserver(() => { if (!frame) frame = requestAnimationFrame(find) })
+    observer.observe(document.querySelector('[data-conversation-scroll]') ?? document.body, { childList: true, subtree: true })
+    find()
+    return () => { cancelAnimationFrame(frame); observer.disconnect() }
+  }, [active])
+  return host
+}
+
 // New rows slide in. The first paint of a transcript, history
 // loaded above, and bulk loads arrive without motion.
 function useRowEntrances(replacing) {
@@ -59,7 +77,7 @@ function useRowEntrances(replacing) {
     }
     const scan = () => {
       frame = 0
-      const next = findHost()?.closest('[data-chat-flow]') ?? null
+      const next = document.querySelector('[data-chat-flow]')
       if (next !== column) {
         observer.disconnect()
         column = next
@@ -85,7 +103,7 @@ function useRowEntrances(replacing) {
   }, [])
 }
 
-export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, useToolState, useSession, useWork, actions }) {
+export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, useSession, useWork, actions }) {
   const roster = useRoster(value => value)
   const running = useSessionStatus(map => map.get(sessionId)?.running === true)
   const turnAt = useWork?.(work => work.turns?.[sessionId])
@@ -98,39 +116,39 @@ export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useL
   const steeredAt = useWork?.(work => work.steered?.[sessionId])
   const pendingInput = useSession(snapshot => freshInputAt(snapshot?.pendingSubmissions, steeredAt))
   const bot = roster.byId[sessionId]
-  const question = roster.questions?.[bot ? currentPart(bot) : sessionId]
   const room = roster.roomsById[sessionId]
   // The one switch the row names: a working-folder move jumps the chat to a fresh
   // part while a turn is not running, so without it the conversation just empties.
   const moveAt = useWork?.((work) => {
-    const entry = bot === undefined ? undefined : work.bots?.[bot.id]
+    const entry = bot !== undefined ? work.bots?.[bot.id]
+      : room !== undefined ? work.rooms?.[room.id]?.find(item => item.self === true) : undefined
     return entry?.switching === true && entry.folder === true && entry.roomId === undefined ? entry.since : 0
   }) ?? 0
   const entries = useMemo(() => Object.values(JSON.parse(liveKey)), [liveKey])
   const streaming = entries.some(entry => entry.text)
-  const active = useToolState(value => value.active)
-  const peer = useToolState(value => value.peer)
-  const peerName = peer ? roster.byId[peer.id]?.name ?? peer.name ?? t('another Bot') : undefined
-  const tools = active.length ? active.map(record => recordActivity(record, roster, { compact: true })) : entries.filter(entry => !entry.text).sort((a, b) => a.at - b.at).map(entry => ({ ...entry, label: t(entry.relay ? 'Coordinating with Bots' : 'Using tools') }))
+  const tools = entries.filter(entry => !entry.text).sort((a, b) => a.at - b.at)
+  // Group chats show who is typing on their own while members speak.
   const relaying = tools.some(entry => entry.relay)
-  const visible = moveAt !== 0 || rowVisible({ running, streaming, tools, relaying, bot, room, capsule: true, active, question })
+  const visible = moveAt !== 0 || rowVisible({ running, streaming, tools, relaying, bot, room })
   const tool = tools.at(-1)
   const inputRef = useRef(0)
+  // A steer keeps the run going, so nothing else resets the row: fresh input is
+  // the newest activity, and the phrase and the clock restart from the send.
   const inputAt = Math.max(inputRef.current, pendingInput)
   inputRef.current = inputAt
   const want = !visible ? null
     : moveAt !== 0 ? { key: 'move', label: t('Switching working folder'), state: 'thinking' }
-      : question ? { key: 'question', label: t('Waiting for your answer'), state: 'alert' }
-      : streaming ? { key: 'replying', label: t('Generating a response'), state: 'working' }
-      : relaying ? { key: 'relaying', label: tool?.label ?? t('Coordinating with Bots'), state: tool?.state ?? 'working' }
-        : tool ? { key: `tool:${tool.label}:${tool.at}`, at: tool.at, label: tool.label ?? t('Using tools'), state: tool.state ?? 'working' }
-          : peer ? { key: `peer:${peer.id}`, label: t('Replying to {name}', { name: peerName }), state: 'working' }
-            : { key: 'thinking', label: t('Waiting for model response'), state: 'thinking' }
+      : inputAt > (tool?.at ?? 0)
+        ? { key: `input:${inputAt}`, pool: PHRASES.thinking, state: 'thinking' }
+        : tool ? { key: tool.label ? `tool:${tool.label}` : 'working', label: tool.label, pool: PHRASES.working, state: tool.state ?? 'working' }
+          : { key: 'thinking', pool: PHRASES.thinking, state: 'thinking' }
   const [shown, setShown] = useState(null)
   const wantKey = want?.key ?? null
+  const markState = useRef('thinking')
+  if (want) markState.current = want.state
   useEffect(() => {
     if (wantKey === null || shown?.key === wantKey) return undefined
-    const make = () => setShown({ key: wantKey, text: want.label, at: Date.now(), startedAt: want.at ?? Date.now() })
+    const make = () => setShown({ key: wantKey, text: want.label ?? drawPhrase(want.pool), at: Date.now() })
     const wait = shown ? shown.at + PHRASE_HOLD_MS - Date.now() : 0
     if (wait <= 0) { make(); return undefined }
     const timer = setTimeout(make, wait)
@@ -138,32 +156,40 @@ export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useL
   }, [wantKey, shown])
   const [phase, setPhase] = useState(null)
   const endedAt = useRef(0)
+  const shift = useRef(null)
   const leaving = useRef(false)
   leaving.current = phase !== null && !visible
   useEffect(() => {
     if (visible) { setPhase('in'); return undefined }
     setPhase(current => (current === 'in' ? 'out' : current))
-    const timer = setTimeout(() => setPhase(current => (current === 'out' ? null : current)), 140)
+    const timer = setTimeout(() => {
+      shift.current = document.querySelector('[data-conversation-scroll]')?.scrollTop ?? null
+      setPhase(current => (current === 'out' ? null : current))
+    }, 140)
     return () => clearTimeout(timer)
   }, [visible])
+  // Removing the row at a pinned tail moves the transcript down; a tail
+  // shift eases that collapse instead of jumping.
   useLayoutEffect(() => {
     if (phase !== null) return
     endedAt.current = Date.now()
     setShown(null)
+    const before = shift.current
+    shift.current = null
+    const scroller = document.querySelector('[data-conversation-scroll]')
+    if (before === null || !scroller || reducedMotion()) return
+    const delta = before - scroller.scrollTop
+    if (delta > 0) scroller.querySelector('[data-chat-flow]')?.animate([{ transform: `translateY(${-delta}px)` }, { transform: 'none' }], { duration: 140, easing: 'cubic-bezier(.23,1,.32,1)' })
   }, [phase])
+  // Cancelled tools never report a result, so their notes end with the run.
   useEffect(() => { if (!running) actions.clearLive(sessionId) }, [running, sessionId])
+  // Only rows that take the activity row's place grow out of it.
   useRowEntrances(() => leaving.current || Date.now() - endedAt.current < 300)
-  const [now, setNow] = useState(Date.now)
-  useEffect(() => {
-    if (phase !== 'in') return undefined
-    const timer = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(timer)
-  }, [phase])
-  if (phase === null || !shown) return null
-  const duration = Math.max(0, now - (turnAt ?? (runAt.current || shown.startedAt)))
-  const elapsed = duration >= 60000 ? elapsedLabel(duration) : duration >= 1000 ? `${Math.floor(duration / 1000)}s` : null
-  const pending = tool && inputAt > (tool.at ?? 0)
-  return h('span', { className: 'bt-pill-status', 'data-exiting': phase === 'out' ? '' : undefined, role: 'status', 'aria-live': 'polite' },
-    h('span', { key: `${shown.key}:${shown.at}`, className: 'bt-pill-status-label', title: shown.text }, h(Shimmer, null, `${shown.text}${pending ? ` · ${t('Message pending')}` : ''}`)),
-    elapsed ? h('span', { className: 'bt-pill-status-time' }, `· ${elapsed}`) : null)
+  const host = useRunningHost(running || moveAt !== 0)
+  if (!host || phase === null || !shown) return null
+  return createPortal(h('div', { className: 'bt-typing', 'data-exiting': phase === 'out' ? '' : undefined, 'aria-hidden': true },
+    bot ? h(BotMark, { bot, size: 28, state: markState.current, live: true, pokeable: true }) : h(RoomAvatar, { room, roster, size: 28 }),
+    h('span', { className: 'bt-typing-text' },
+      h('span', { key: `${shown.key}:${shown.at}`, className: 'bt-typing-label' }, h(Shimmer, null, `${shown.text}…`)),
+      h(Elapsed, { at: moveAt !== 0 ? moveAt : Math.max(turnAt ?? runAt.current, inputAt), className: 'bt-typing-time' }))), host)
 }

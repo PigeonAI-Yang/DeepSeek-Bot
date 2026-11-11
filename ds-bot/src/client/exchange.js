@@ -4,13 +4,13 @@ import { dayLabel } from './text.js'
 import { colorOf, BotMark } from './mark.js'
 import { Bubbles } from './cells.js'
 import { stripLongNote } from './fold.js'
-import { useEscape, usePaneLeft } from './overlay-hooks.js'
+import { useEscape } from './overlay-hooks.js'
 import { layoutOf } from './themes.js'
 import { t } from './i18n.js'
 
 const SHEET_EXIT_MS = 220
 
-export function ExchangeDialog({ pair, roster, actions }) {
+export function ExchangeDialog({ pair, paneLeft, roster, actions }) {
   const [entries, setEntries] = useState(null)
   const [leaving, setLeaving] = useState(false)
   const log = useRef(null)
@@ -45,7 +45,6 @@ export function ExchangeDialog({ pair, roster, actions }) {
   const right = roster.byId[pair[1]]
   const flat = layoutOf(roster.prefs) === 'flat'
   let lastDay = 0
-  const paneLeft = usePaneLeft()
   return h('div', { className: 'bt-pane bt-exchange', style: { left: paneLeft }, 'data-leaving': leaving || undefined },
     h('div', { className: 'bt-dialog', role: 'dialog', 'aria-label': t('Bot exchange') },
       h('div', { className: 'bt-head' }, h('span', { className: 'bt-pill', style: { cursor: 'default' } },
@@ -68,9 +67,8 @@ export function ExchangeDialog({ pair, roster, actions }) {
               return h(Fragment, { key: entry.id },
                 showDay ? h('time', { className: 'bt-time' }, dayLabel(entry.time)) : null,
                 h('div', { className: 'bt-group-msg' },
-                  h('div', { className: 'bt-group-head' }, lead,
-                    h('span', { className: 'bt-group-name', style: flat ? undefined : { color: inkText(colorOf(bot)) } }, bot.name)),
-                  h(Bubbles, { texts: [stripLongNote(entry.text)], roster, selfId: bot.id, actions, whole })))
+                  h('span', { className: 'bt-group-name', style: flat ? undefined : { color: inkText(colorOf(bot)) } }, flat ? lead : null, bot.name),
+                  h(Bubbles, { texts: [stripLongNote(entry.text)], roster, selfId: bot.id, actions, whole, lead: flat ? null : lead })))
             })),
       h('div', { className: 'bt-dialog-foot' }, h('button', { type: 'button', className: 'bt-soft', onClick: close }, t('Close Chat')))))
 }

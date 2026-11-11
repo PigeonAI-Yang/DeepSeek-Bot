@@ -25,8 +25,9 @@ runInNewContext(bundle.outputFiles[0].text, {
     if (!(name in platform)) throw new Error(`no platform module ${name}`)
     return platform[name]
   },
+  queueMicrotask,
 })
-const { ChatRows, ThinkingRow } = module.exports
+const { ChatRows, ThinkingRow, syncGroupChains } = module.exports
 
 const roster = { byId: { b: { id: 'b', name: 'Writer' } }, roomsById: {} }
 const MINUTE = 60_000
@@ -83,24 +84,49 @@ test('the reasoning row is a closed details that opens to the text', () => {
   assert.equal(typeof row.props.onToggle, 'function')
   const [title, box] = row.children
   assert.equal(title.type, 'summary')
-  assert.equal(title.props['aria-label'], 'Thought it through')
+  assert.equal(title.children.join(''), 'Thought it through')
   assert.equal(box.props.className, 'bt-think-text')
 })
 
 test('a live reasoning row titles "Thinking" with a ticking clock', () => {
   const row = ThinkingRow({ text: 'one\ntwo', live: true, at: Date.now() - 4000 })
   const title = row.children[0]
-  assert.equal(title.props['aria-label'], 'Thinking')
-  assert.equal(title.children.find(child => child?.type?.name === 'Elapsed')?.type.name, 'Elapsed')
-  assert.equal(title.children.find(child => child?.type?.name === 'Elapsed')?.props.at <= Date.now() - 4000, true)
+  assert.equal(title.children[0], 'Thinking')
+  assert.equal(title.children[1]?.type?.name, 'Elapsed')
+  assert.equal(title.children[1]?.props.at <= Date.now() - 4000, true)
 })
 
 test('a settled reasoning row shows the turn’s thinking time when known', () => {
   const timed = ThinkingRow({ text: 'one\ntwo', ms: 12_000 })
   const [title] = timed.children
-  assert.equal(title.props['aria-label'], 'Thought it through')
-  const time = title.children.find(child => child?.props?.className === 'bt-think-time')
+  assert.equal(title.children[0], 'Thought it through')
+  const time = title.children.find(child => child?.type === 'span')
   assert.equal(time?.children.join(''), '· 12s')
   const untimed = ThinkingRow({ text: 'one\ntwo' })
-  assert.equal(untimed.children[0].props['aria-label'], 'Thought it through')
+  assert.equal(untimed.children[0].children.join(''), 'Thought it through')
+})
+
+test('consecutive group messages from the same Bot chain together, and cards or user rows break the chain', () => {
+  const node = (classes, botId, turn = {}) => ({
+    dataset: botId ? { botId } : {},
+    classList: { contains: name => classes.includes(name) },
+    closest: sel => (sel === '[data-chat-group-key]' ? turn : null),
+  })
+  const t1 = { dataset: {} }, t2 = { dataset: {} }, t3 = { dataset: {} }, t4 = { dataset: {} }
+  const m1 = node(['bt-group-msg'], 'a', t1)
+  const m2 = node(['bt-group-msg'], 'a', t2)
+  const card = node(['bt-q-inline'])
+  const m3 = node(['bt-group-msg'], 'a', t3)
+  const hostUser = node([], undefined)
+  const m4 = node(['bt-group-msg'], 'a', t4)
+  syncGroupChains({ querySelectorAll: () => [m1, m2, card, m3, hostUser, m4] })
+  assert.equal(m1.dataset.chainPrev, undefined)
+  assert.equal(m1.dataset.chainNext, '')
+  assert.equal(t1.dataset.btChainNext, '')
+  assert.equal(m2.dataset.chainPrev, '')
+  assert.equal(m2.dataset.chainNext, undefined)
+  assert.equal(t2.dataset.btChainPrev, '')
+  assert.equal(m3.dataset.chainPrev, undefined)
+  assert.equal(m3.dataset.chainNext, undefined)
+  assert.equal(m4.dataset.chainPrev, undefined)
 })

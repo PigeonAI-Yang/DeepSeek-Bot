@@ -15,7 +15,7 @@ runInNewContext(bundle.outputFiles[0].text, {
   module, exports: module.exports, URL, URLSearchParams, setTimeout, clearTimeout,
   require: (name) => {
     const platform = {
-      react: { createContext: (initial) => { const ctx = { value: initial }; ctx.Provider = ({ value, children }) => { ctx.value = value; return children }; return ctx }, useContext: ctx => ctx.value, useId: () => 'dv-id', useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),  createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }), useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}], useEffect: () => {}, useRef: current => ({ current }), useLayoutEffect: () => {}, useMemo: make => make(), useCallback: fn => fn, Fragment: 'fragment' },
+      react: { createContext: (initial) => { const ctx = { value: initial }; ctx.Provider = ({ value, children }) => { ctx.value = value; return children }; return ctx }, useContext: ctx => ctx.value, useId: () => 'dv-id', useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),  createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }), useState: initial => [initial, () => {}], useEffect: () => {}, useRef: current => ({ current }), useLayoutEffect: () => {}, useMemo: make => make(), useCallback: fn => fn, Fragment: 'fragment' },
       'react-dom': { createPortal: node => node },
       '@deepseek-ai/dsh-client-ui-primitives': { MarkdownText: () => null },
     }
@@ -38,7 +38,6 @@ const header = (actions, navigation = {}) => HeaderPill({
   useTurnClock: hook({}),
   useUi: hook({}),
   useLive: hook({}),
-  useOutputs: hook([]),
   actions,
   ...navigation,
 })
@@ -51,8 +50,6 @@ const sideButton = (node) => {
   }
   return null
 }
-
-const pillOf = node => node?.props?.className?.split(' ').includes('bt-pill') ? node : (node?.children ?? []).map(pillOf).find(Boolean)
 
 // 公开#456: the Bot header carries no right-sidebar toggle — the drawer and the
 // column never share the window, and the way in sits in the drawer instead.
@@ -70,7 +67,7 @@ test('a Bot in another Conversation View can return to chat without changing its
     selectView: view => { state.view = view },
   }
   const actions = { toggleDetails: () => { details += 1 } }
-  const pill = pillOf(header(actions, navigation))
+  const pill = header(actions, navigation).children[0]
   assert.equal(pill.props['aria-label'], 'Back to chat')
   assert.equal(pill.props['aria-expanded'], undefined)
   assert.equal(pill.props.title, 'Chief')
@@ -78,7 +75,7 @@ test('a Bot in another Conversation View can return to chat without changing its
   assert.equal(state.view, 'chat')
   assert.equal(state.draft, 'Keep this draft')
   assert.equal(details, 0)
-  const restored = pillOf(header(actions, navigation))
+  const restored = header(actions, navigation).children[0]
   assert.equal(restored.props['aria-label'], 'View conversation details')
   restored.props.onClick()
   assert.equal(details, 1)
@@ -87,10 +84,10 @@ test('a Bot in another Conversation View can return to chat without changing its
 test('a missing View or navigation face keeps the ordinary Bot header', () => {
   const views = [{ id: 'chat' }, { id: 'trajectory' }]
   for (const view of [null, 'chat', 'uninstalled-plugin']) {
-    const pill = pillOf(header({}, { useStore: hook({ view }), useConversationViews: hook(views), selectView() {} }))
+    const pill = header({}, { useStore: hook({ view }), useConversationViews: hook(views), selectView() {} }).children[0]
     assert.equal(pill.props['aria-label'], 'View conversation details')
   }
-  assert.equal(pillOf(header({})).props['aria-label'], 'View conversation details')
+  assert.equal(header({}).children[0].props['aria-label'], 'View conversation details')
 })
 
 test('the replacement header shares DSH\'s store and navigation injection without declaring its children again', () => {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
-import { agentsProblem, agentsRequest, applyEdits, LEARNING, parseJson, skillProblem, withoutReviewedAgentsRecords } from '../src/host/learning.js'
+import { agentsAnswer, agentsProblem, agentsRequest, applyEdits, LEARNING, parseJson, skillProblem, withoutReviewedAgentsRecords } from '../src/host/learning.js'
 import { fakeContext } from './fake-ctx.js'
 
 const TEAM = {
@@ -169,6 +169,25 @@ test('agentsProblem validates edit safety and whole-line matches', () => {
   const long = `# ${'x'.repeat(3997)}`
   const large = { action: 'edit', edits: [1, 2, 3].map(index => ({ op: 'add', after: '', text: `- ${index}${'y'.repeat(397)}`, why: 'Repeated correction.' })) }
   assert.match(agentsProblem(large, long), /too large/)
+})
+
+test('agentsAnswer reads an edit written as the answer, an empty replacement, and lines apart as edits', () => {
+  const current = '# Project\n- Use yarn.\n- Do not edit vendor/.\n- Run `yarn test`.\n'
+  const why = 'The user moved the project to pnpm.'
+  const answer = value => agentsAnswer(JSON.stringify(value), current)
+  const flat = answer({ action: 'replace', old: '- Use yarn.', text: '- Use pnpm.', why })
+  assert.deepEqual(flat, { action: 'edit', edits: [{ op: 'replace', old: '- Use yarn.', text: '- Use pnpm.', why }] })
+  assert.equal(agentsProblem(flat, current), undefined)
+  assert.deepEqual(answer({ action: 'edit', edits: [{ op: 'replace', old: '- Use yarn.', text: ' ', why }] }).edits, [{ op: 'remove', old: '- Use yarn.', why }])
+  const apart = answer({ action: 'edit', edits: [{ op: 'replace', old: '- Use yarn.\n- Run `yarn test`.', text: '- Use pnpm.\n- Run `pnpm test`.', why }] })
+  assert.deepEqual(apart.edits.map(edit => [edit.old, edit.text]), [['- Use yarn.', '- Use pnpm.'], ['- Run `yarn test`.', '- Run `pnpm test`.']])
+  assert.equal(applyEdits(current, apart.edits), '# Project\n- Use pnpm.\n- Do not edit vendor/.\n- Run `pnpm test`.\n')
+  assert.equal(answer({ action: 'edit', edits: [{ op: 'remove', old: '- Use yarn.\n- Run `yarn test`.', why }] }).edits.length, 2)
+  // Lines apart with a different number of new lines stay one edit, and the check refuses it.
+  const uneven = answer({ action: 'edit', edits: [{ op: 'replace', old: '- Use yarn.\n- Run `yarn test`.', text: '- Use pnpm.', why }] })
+  assert.match(agentsProblem(uneven, current), /exactly once/)
+  assert.deepEqual(answer({ action: 'none', reason: 'Routine work.' }), { action: 'none', reason: 'Routine work.' })
+  assert.equal(agentsAnswer('no JSON here', current), undefined)
 })
 
 test('applyEdits supports end and anchored add, replace, remove, and a new file', () => {
@@ -567,13 +586,22 @@ test('long turns ending during review remain pending for the next pass', async t
     config: { learningTimes: { tickMs: 100_000 } },
   })
   t.after(() => runtime.stop())
+  // Every load and save rebuilds the owner maps from the roster, and the startup model sync
+  // saves while the test runs: b3 is put back after each of them.
+  const owned = () => { runtime.rt.chatOwners.set('b3', 'b2') }
   const load = runtime.rt.load
   runtime.rt.load = async (...args) => {
     const result = await load(...args)
-    runtime.rt.chatOwners.set('b3', 'b2')
+    owned()
     return result
   }
-  runtime.rt.chatOwners.set('b3', 'b2')
+  const save = runtime.rt.save
+  runtime.rt.save = (...args) => {
+    const result = save(...args)
+    owned()
+    return result
+  }
+  owned()
   const b3Statuses = []
   runtime.ctx.on('agent/status', ({ agent, status }) => {
     if (agent?.id === 'b3') b3Statuses.push(status)
@@ -817,6 +845,12 @@ test('declined proposals are recorded and included in the next skill request', a
   assert.equal(runtime.teamState().capabilities.items['release-checks'], undefined)
   assert.equal(runtime.learningState().declined[0].name, 'release-checks')
   assert.match(runtime.requests[1].messages[0].content[0].text, /Proposals the user declined[\s\S]*- release-checks: Use when checking a release\./)
+  // The declined card stays in the chat part it was answered in, read-only.
+  const view = (await runtime.call('state')).value
+  assert.equal(view.learning.b2, undefined)
+  assert.deepEqual(view.learningSettled.b2.map(entry => [entry.id, entry.name, entry.outcome, entry.sessionId]), [[proposal.id, 'release-checks', 'declined', 'b2']])
+  assert.equal(typeof view.learningSettled.b2[0].settledAt, 'number')
+  assert.equal((await runtime.call('learning-answer', { id: proposal.id, approve: true })).ok, false)
 })
 
 test('an update approval fails if the learned skill description alone changed', async t => {

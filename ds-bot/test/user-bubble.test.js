@@ -23,7 +23,7 @@ function rulesWith(pattern) {
 const declared = (body, property) => body.split(';').map(item => item.trim()).find(item => item.startsWith(`${property}:`))?.slice(property.length + 1)
 const surface = body => declared(body, 'background') ?? declared(body, 'background-color')
 const ruleFor = selector => {
-  const rule = rulesWith(/color:var\(--bt-(?:user-ink|ink|chat-ink,var\(--bt-ink\))\)/g).find(item => item.selector.startsWith(selector))
+  const rule = rulesWith(/color:var\(--bt-user-ink\)/g).find(item => item.selector.startsWith(selector))
   assert.ok(rule, `no rule for ${selector}`)
   return rule
 }
@@ -52,9 +52,7 @@ test('ds-bot leaves the host bubble variables to the host and its skins', () => 
 
 const themeVars = (theme, dark) => {
   const block = themeCss(theme).split('\n').find(line => line.startsWith(dark ? 'html body[data-ds-dark-theme]{' : 'html body{'))
-  const vars = Object.fromEntries(block.slice(block.indexOf('{') + 1, -1).split(';').map(item => item.split(':')))
-  vars['--bt-chat-user-bg'] = dark ? over('rgba(255,255,255,.08)', vars['--bt-main']) : '#ffffff'
-  return vars
+  return Object.fromEntries(block.slice(block.indexOf('{') + 1, -1).split(';').map(item => item.split(':')))
 }
 const parse = color => {
   if (/^#[0-9a-f]{6}$/i.test(color)) return { hex: color.toLowerCase(), alpha: 1 }
@@ -166,6 +164,6 @@ test('a user message stays readable when a dark skin repaints the host bubble', 
 
 test('the surface wins over the host bubble rule that reads the skin variable', () => {
   const { body } = ruleFor('[class*="_userRow"] [class*="_bubble"]')
-  assert.equal(surface(body), 'var(--bt-chat-user-bg)!important')
-  assert.equal(declared(body, 'color'), 'var(--bt-chat-ink,var(--bt-ink))!important')
+  assert.equal(surface(body), 'var(--bt-user)!important')
+  assert.equal(declared(body, 'color'), 'var(--bt-user-ink)!important')
 })

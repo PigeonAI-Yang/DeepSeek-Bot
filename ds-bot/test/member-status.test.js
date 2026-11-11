@@ -39,16 +39,17 @@ const capsuleOf = (node) => {
 test('the members line names who waits for an approval first, then who is at work', () => {
   const names = { a: 'Anvil', b: 'Flint', c: 'Prism', d: 'Quill', e: 'King', f: 'Comet' }
   const roster = { byId: Object.fromEntries(Object.entries(names).map(([id, name]) => [id, { id, name }])) }
-  const room = { members: ['e', 'd', 'a', 'b', 'c', 'f'] }
+  const room = { id: 'r1', members: ['e', 'd', 'a', 'b', 'c', 'f'] }
   const work = {
     bots: { d: { since: 1, tool: 'edit' }, a: { since: 1, tool: 'pwsh' }, f: { since: 1 } },
+    rooms: { r1: [{ botId: 'd', since: 1, tool: 'edit' }, { botId: 'f', since: 1 }] },
     approvals: [{ botId: 'a' }, { botId: 'b' }, { botId: 'c' }],
   }
   const busy = busyMembers(room, work, roster)
   assert.deepEqual(plain(busy.map(entry => [entry.bot.name, entry.state])), [['Anvil', 'ask'], ['Flint', 'ask'], ['Prism', 'ask'], ['Quill', 'work'], ['Comet', 'work']])
-  assert.deepEqual(plain(summaryText(busy)), { waiting: 'Anvil, Flint and 1 more are waiting for your approval', doing: 'Quill · Executing edit… +1' })
+  assert.deepEqual(plain(summaryText(busy)), { waiting: 'Anvil, Flint and 1 more are waiting for your approval', doing: 'Quill · Writing changes… +1' })
   assert.deepEqual(plain(summaryText(busy.slice(1, 3))), { waiting: 'Flint and Prism are waiting for your approval', doing: '' })
-  assert.deepEqual(plain(summaryText(busy.slice(4))), { waiting: '', doing: 'Comet · Waiting for model response…' })
+  assert.deepEqual(plain(summaryText(busy.slice(4))), { waiting: '', doing: 'Comet · Thinking about it…' })
   assert.equal(busyMembers(room, { bots: {}, approvals: [] }, roster).length, 0)
 })
 
@@ -134,18 +135,19 @@ const dock = (sessionId, work) => {
 
 test('one capsule names who waits and who works, without the round\'s speaker, and opens the details', () => {
   const work = {
-    // Anvil runs in its own chat too; its work here wins.
+    // Anvil runs in its own chat too; its work here wins. Coral's work in r2 shows
+    // there and on its own chat, not here (#473).
     bots: { a: { since: 1, tool: 'pwsh' }, b: { since: 1, roomId: 'r2', tool: 'edit' } },
     rooms: { r1: [{ botId: 'a', since: 1, tool: 'write' }, { botId: 'd', since: 1, speaking: true }], r2: [{ botId: 'b', since: 1, tool: 'edit' }] },
     approvals: [{ botId: 'c', roomId: 'r1' }],
   }
-  assert.deepEqual(plain(dock('r1', work)), { label: 'Prism is waiting for your approval · Anvil · Executing write… +1', calls: [['details', 'r1']] })
+  assert.deepEqual(plain(dock('r1', work)), { label: 'Prism is waiting for your approval · Anvil · Writing changes…', calls: [['details', 'r1']] })
   assert.equal(dock('r1', { bots: {}, rooms: { r1: [{ botId: 'd', since: 1, speaking: true }] }, approvals: [] }), null)
 })
 
 test('a Bot\'s own chat shows the groups it is at work in, unless its own chat runs', () => {
   const away = { bots: { a: { since: 1, roomId: 'r1', tool: 'pwsh' } }, rooms: { r1: [{ botId: 'a', since: 1, tool: 'pwsh' }], r2: [{ botId: 'a', since: 1 }] }, approvals: [] }
-  assert.deepEqual(plain(dock('a', away)), { label: 'in Ops · Executing pwsh… +1', calls: [['session', 'r1']] })
+  assert.deepEqual(plain(dock('a', away)), { label: 'in Ops · Running shell commands… +1', calls: [['session', 'r1']] })
   assert.equal(dock('a', { ...away, bots: { a: { since: 1 } } }), null)
   assert.equal(dock('b', away), null)
 })
@@ -153,7 +155,7 @@ test('a Bot\'s own chat shows the groups it is at work in, unless its own chat r
 test('the capsule says what a member does in its call\'s own words, and that it moves to a fresh conversation', () => {
   const label = doing => dock('r1', { bots: {}, rooms: { r1: [{ botId: 'a', since: 1, ...doing }] }, approvals: [] }).label
   assert.equal(label({ tool: 'pwsh', note: 'Download Ghidra 12.1.4 and check its hash.' }), 'Anvil · Download Ghidra 12.1.4 and check its hash…')
-  assert.equal(label({ tool: 'read', target: 'dump.py' }), 'Anvil · Executing read · dump.py…')
+  assert.equal(label({ tool: 'read', target: 'dump.py' }), 'Anvil · Opening a file · dump.py…')
   assert.equal(label({ switching: true }), 'Anvil · Moving to a fresh conversation…')
   assert.equal(label({ switching: true, folder: true }), 'Anvil · Switching working folder…')
   assert.equal(label({ tool: 'pwsh', said: '解压 Ghidra，顺便写脚本。', note: 'Expand-Archive' }), 'Anvil · 解压 Ghidra，顺便写脚本…')
@@ -164,8 +166,7 @@ test('a member\'s line runs a clock from its turn\'s start or its approval\'s', 
   const flat = node => (node === null || node === '' ? '' : typeof node === 'string' ? node
     : node.props.at !== undefined ? `{${node.props.at}}` : node.children.map(flat).join(''))
   const stateText = entry => flat(MemberState({ entry, bot: { id: 'a', name: 'Anvil' }, room: { id: 'r1' }, roster: team }))
-  assert.equal(stateText({ state: 'work', doing: { roomId: 'r1', tool: 'pwsh', since: 1_000 } }), 'Executing pwsh…{1000}')
-  assert.equal(stateText({ state: 'work', doing: { roomId: 'r2', tool: 'pwsh', since: 1_000 } }), 'Executing pwsh… in Docs{1000}')
+  assert.equal(stateText({ state: 'work', doing: { roomId: 'r1', tool: 'pwsh', since: 1_000 } }), 'Running shell commands…{1000}')
   assert.equal(stateText({ state: 'ask', approvals: [{ at: 2_000 }] }), 'Waiting for your approval{2000}')
   assert.equal(flat(MemberState({ entry: { state: 'idle' }, bot: { id: 'a', name: 'Anvil', role: 'Writer' }, room: { id: 'r1' }, roster: team })), 'Writer')
 })

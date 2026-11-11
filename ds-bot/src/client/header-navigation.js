@@ -10,7 +10,7 @@ export function headerNavigation(entries, face) {
     ...(source ? { store: source.store } : {}),
     inject: (...args) => {
       const navigation = source?.inject(...args) ?? {}
-      const own = face(...args)
+      const own = face()
       return { ...navigation, ...own, hooks: { ...navigation.hooks, ...own.hooks } }
     },
   }

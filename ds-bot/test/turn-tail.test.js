@@ -28,7 +28,7 @@ runInNewContext(bundle.outputFiles[0].text, {
     return platform[name]
   },
 })
-const { AssistantCell, TurnTailCell, ThinkingRow } = module.exports
+const { AssistantCell, TurnTailCell, ThinkingRow, CellEmpty } = module.exports
 
 // Renders the named components of an element tree, leaving the rest as elements.
 const expand = (node, names) => {
@@ -47,8 +47,7 @@ const roster = { bots: [], byId: { b: { id: 'b', name: 'Writer' } }, roomsById: 
 const finished = { turn: 3, status: 'closed', end: { time: 2_000 } }
 function cellProps({ closingSeq = 10, turn = finished } = {}) {
   const asked = []
-  const existing = { title: 'existing turn file' }
-  const links = { resolve: value => value === 'brief.md' ? existing : undefined }
+  const links = { resolve: () => undefined }
   const props = {
     node: {
       key: 'n10',
@@ -72,8 +71,7 @@ const markdownOf = props => find(expand(AssistantCell(props), ['Bubbles', 'Bubbl
 test('a reply that closes its turn links the files the turn changed or delivered', () => {
   const { props, asked, links } = cellProps()
   const [markdown] = markdownOf(props)
-  assert.equal(markdown.props.fileMentions.resolve('brief.md'), links.resolve('brief.md'))
-  assert.equal(markdown.props.fileMentions.resolve('unrelated.md'), undefined)
+  assert.equal(markdown.props.fileMentions, links)
   assert.equal(asked.length, 1)
   assert.equal(asked[0].turn, finished)
   assert.equal(asked[0].seq, 10)
@@ -82,9 +80,9 @@ test('a reply that closes its turn links the files the turn changed or delivered
 
 test('a reply that does not close its turn, or one still running, links nothing', () => {
   const earlier = cellProps({ closingSeq: 12 })
-  assert.equal(markdownOf(earlier.props)[0].props.fileMentions.resolve('brief.md'), undefined)
+  assert.equal(markdownOf(earlier.props)[0].props.fileMentions, undefined)
   const running = cellProps({ turn: { turn: 3, status: 'open' } })
-  assert.equal(markdownOf(running.props)[0].props.fileMentions.resolve('brief.md'), undefined)
+  assert.equal(markdownOf(running.props)[0].props.fileMentions, undefined)
   assert.equal(earlier.asked.length + running.asked.length, 0)
 })
 
@@ -95,9 +93,6 @@ test('the turn tail entry notes when the turn ended and shows the pause before t
   const out = TurnTailCell({
     turn: finished,
     sessionId: 'b',
-    useRoster: select => select(roster),
-    useTurnSteps: () => [],
-    useTurnTriggers: () => [],
     useTurnClock: select => select(clock),
     useUi: () => undefined,
     actions: { noteTurnTime: (...args) => noted.push(args) },
@@ -137,9 +132,9 @@ test('the thinking row shows only with its switch on, and the activity row is ne
   }
   const reason = [{ kind: 'reasoning', text: 'Weighing it' }]
   const thinking = { turn: 3, step: 1, status: 'running', blocks: reason }
-  // Off: a thinking step draws nothing and notes nothing.
+  // Off: a thinking step draws nothing — the empty mark — and notes nothing.
   const off = cell({}, reason, [thinking])
-  assert.equal(off.out, null)
+  assert.equal(off.out?.type, CellEmpty)
   assert.deepEqual(off.noted, [])
   // On: the live row shows — and still notes nothing, so the activity row stays.
   const on = cell({ thinking: true }, reason, [thinking])
